@@ -1,0 +1,12 @@
+{
+  "name": "discord-smak-poll",
+  "version": "1.0.0",
+  "description": "Custom Discord S.M.A.K. poll bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.21.0"
+  }
+}
