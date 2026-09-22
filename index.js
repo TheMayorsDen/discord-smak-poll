@@ -86,14 +86,14 @@ client.on('interactionCreate', async interaction => {
     // /poll
     // -------------------------
 
-    if (interaction.isChatInputCommand()) {
+if (interaction.commandName !== 'poll') return;
 
-        if (interaction.commandName !== 'poll') return;
+await interaction.deferReply();
 
-        votes.clear();
-        selections.clear();
+votes.clear();
+selections.clear();
 
-        const image = await createResultsImage();
+const image = await createResultsImage();
 
         const castButton =
             new ActionRowBuilder()
@@ -105,8 +105,8 @@ client.on('interactionCreate', async interaction => {
                         .setStyle(ButtonStyle.Primary)
                 );
 
-        const message =
-            await interaction.reply({
+const message =
+    await interaction.editReply({
                 files: [
                     new AttachmentBuilder(image, {
                         name: 'smak-results.png'
