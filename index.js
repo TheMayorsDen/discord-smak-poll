@@ -77,12 +77,12 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async interaction => {
 
-    // /poll
     if (interaction.isChatInputCommand()) {
 
         if (interaction.commandName !== 'poll') return;
 
         try {
+
             await interaction.deferReply();
 
             votes.clear();
@@ -113,19 +113,21 @@ client.on('interactionCreate', async interaction => {
             pollMessage = message;
 
         } catch (error) {
-            console.error('Poll creation error:', error);
 
-            if (interaction.deferred || interaction.replied) {
-                await interaction.editReply({
-                    content: '❌ Something went wrong creating the poll.'
-                }).catch(() => {});
-            }
+            console.error(
+                'Poll creation error:',
+                error
+            );
+
+            await interaction.editReply({
+                content:
+                    '❌ Something went wrong creating the poll.'
+            }).catch(() => {});
         }
 
         return;
     }
 
-    // BUTTONS
     if (interaction.isButton()) {
 
         if (interaction.customId === 'cast_vote') {
@@ -213,7 +215,6 @@ client.on('interactionCreate', async interaction => {
         }
     }
 
-    // DROPDOWNS
     if (interaction.isStringSelectMenu()) {
 
         const userId = interaction.user.id;
@@ -247,7 +248,6 @@ client.on('interactionCreate', async interaction => {
     }
 });
 
-// VOTING DROPDOWNS
 function buildVoteComponents(current) {
 
     const used =
@@ -337,7 +337,6 @@ function buildVoteComponents(current) {
     return rows;
 }
 
-// CREATE RESULTS IMAGE
 async function createResultsImage() {
 
     const response =
@@ -353,6 +352,18 @@ async function createResultsImage() {
         Buffer.from(
             await response.arrayBuffer()
         );
+
+    const baseImage =
+        sharp(baseBuffer);
+
+    const metadata =
+        await baseImage.metadata();
+
+    const baseWidth =
+        metadata.width;
+
+    const baseHeight =
+        metadata.height;
 
     const counts = {};
 
@@ -384,11 +395,11 @@ async function createResultsImage() {
     }
 
     const characterCenters = [
-        192,
-        576,
-        960,
-        1344,
-        1728
+        baseWidth * 0.1,
+        baseWidth * 0.3,
+        baseWidth * 0.5,
+        baseWidth * 0.7,
+        baseWidth * 0.9
     ];
 
     const positions =
@@ -439,7 +450,7 @@ async function createResultsImage() {
                         ];
 
                     const y =
-                        22 +
+                        20 +
                         stackIndex * 54;
 
                     const width =
@@ -479,16 +490,19 @@ async function createResultsImage() {
         }
     );
 
+    const svgHeight =
+        240;
+
     const svg =
         Buffer.from(`
             <svg
-                width="1920"
-                height="1320"
+                width="${baseWidth}"
+                height="${svgHeight}"
                 xmlns="http://www.w3.org/2000/svg"
             >
                 <rect
-                    width="1920"
-                    height="1320"
+                    width="${baseWidth}"
+                    height="${svgHeight}"
                     fill="#14151b"
                 />
 
@@ -497,9 +511,9 @@ async function createResultsImage() {
             </svg>
         `);
 
-    return sharp(baseBuffer)
+    return baseImage
         .extend({
-            top: 240,
+            top: svgHeight,
             bottom: 0,
             left: 0,
             right: 0,
