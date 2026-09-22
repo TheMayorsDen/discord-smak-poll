@@ -8,16 +8,15 @@ const {
     SlashCommandBuilder,
     ActionRowBuilder,
     StringSelectMenuBuilder,
+    ButtonBuilder,
+    ButtonStyle,
     EmbedBuilder
 } = require('discord.js');
 
 const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds
-    ]
+    intents: [GatewayIntentBits.Guilds]
 });
 
-// Render requires a web server
 const port = process.env.PORT || 3000;
 
 http.createServer((req, res) => {
@@ -27,9 +26,12 @@ http.createServer((req, res) => {
     console.log(`Web server listening on port ${port}`);
 });
 
-// --------------------------------------------------
-// POLL SETTINGS
-// --------------------------------------------------
+// -------------------------
+// POLL
+// -------------------------
+
+const imageUrl =
+    'https://raw.githubusercontent.com/TheMayorsDen/discord-smak-poll/main/smak_five_character_panel.png';
 
 const characters = [
     { id: 'dante', name: 'DANTE' },
@@ -47,15 +49,26 @@ const choices = {
     kill: '💀 KILL'
 };
 
-// Stores everyone's submitted votes
-const votes = new Map();
+const choiceEmoji = {
+    friendzone: '💙',
+    snog: '😘',
+    smash: '🔥',
+    marry: '💍',
+    kill: '💀'
+};
 
-// Stores people's selections before they submit
+// Temporary selections while users are voting
 const selections = new Map();
 
-// --------------------------------------------------
-// SLASH COMMAND
-// --------------------------------------------------
+// Completed votes
+const votes = new Map();
+
+// The Discord message containing the poll
+let pollMessage = null;
+
+// -------------------------
+// COMMAND
+// -------------------------
 
 const commands = [
     new SlashCommandBuilder()
@@ -63,9 +76,9 @@ const commands = [
         .setDescription('Create the S.M.A.K. poll')
 ].map(command => command.toJSON());
 
-// --------------------------------------------------
-// BOT READY
-// --------------------------------------------------
+// -------------------------
+// READY
+// -------------------------
 
 client.once('ready', async () => {
 
@@ -85,96 +98,39 @@ client.once('ready', async () => {
 
     } catch (error) {
 
-        console.error('Could not register slash command:', error);
+        console.error(error);
 
     }
 });
 
-// --------------------------------------------------
+// -------------------------
 // CREATE POLL
-// --------------------------------------------------
+// -------------------------
 
 client.on('interactionCreate', async interaction => {
 
     if (interaction.isChatInputCommand()) {
 
-        if (interaction.commandName === 'poll') {
+        if (interaction.commandName !== 'poll') return;
 
-            const imageUrl =
-                'https://raw.githubusercontent.com/TheMayorsDen/discord-smak-poll/main/smak_five_character_panel.png';
+        const embed = createPollEmbed();
 
-            const embed = new EmbedBuilder()
-                .setTitle('😈 SNOG • SMASH • MARRY • KILL')
-                .setDescription(
-                    '**Assign one different option to each character.**\n\n' +
-                    'You must use **all five options exactly once**.\n\n' +
-                    'Your vote is automatically submitted when all five choices are complete.'
-                )
-                .setImage(imageUrl);
+        const components = createPollComponents();
 
-            const rows = characters.map(character => {
+        const message = await interaction.reply({
+            embeds: [embed],
+            components,
+            fetchReply: true
+        });
 
-                return new ActionRowBuilder()
-                    .addComponents(
-
-                        new StringSelectMenuBuilder()
-                            .setCustomId(`character_${character.id}`)
-                            .setPlaceholder(`${character.name} — Choose an option`)
-                            .addOptions(
-
-                                {
-                                    label: 'FRIEND-ZONE',
-                                    description: `Friend-zone ${character.name}`,
-                                    value: 'friendzone',
-                                    emoji: '💙'
-                                },
-
-                                {
-                                    label: 'SNOG',
-                                    description: `Snog ${character.name}`,
-                                    value: 'snog',
-                                    emoji: '😘'
-                                },
-
-                                {
-                                    label: 'SMASH',
-                                    description: `Smash ${character.name}`,
-                                    value: 'smash',
-                                    emoji: '🔥'
-                                },
-
-                                {
-                                    label: 'MARRY',
-                                    description: `Marry ${character.name}`,
-                                    value: 'marry',
-                                    emoji: '💍'
-                                },
-
-                                {
-                                    label: 'KILL',
-                                    description: `Kill ${character.name}`,
-                                    value: 'kill',
-                                    emoji: '💀'
-                                }
-
-                            )
-                    );
-
-            });
-
-            await interaction.reply({
-                embeds: [embed],
-                components: rows
-            });
-
-        }
+        pollMessage = message;
 
         return;
     }
 
-    // --------------------------------------------------
-    // CHARACTER SELECTION
-    // --------------------------------------------------
+    // -------------------------
+    // DROPDOWN
+    // -------------------------
 
     if (interaction.isStringSelectMenu()) {
 
@@ -186,103 +142,187 @@ client.on('interactionCreate', async interaction => {
         const selectedChoice =
             interaction.values[0];
 
-        // Get existing selections
         let userSelections =
             selections.get(userId) || {};
 
-        // Check whether this choice is already being used
-        const alreadyUsedBy =
-            Object.entries(userSelections)
-                .find(([character, choice]) =>
-                    choice === selectedChoice &&
-                    character !== characterId
-                );
+        // Check duplicate choice
+        const duplicate = Object.entries(userSelections)
+            .find(([character, choice]) =>
+                character !== characterId &&
+                choice === selectedChoice
+            );
 
-        if (alreadyUsedBy) {
+        if (duplicate) {
 
-            const otherCharacter =
-                characters.find(c =>
-                    c.id === alreadyUsedBy[0]
-                );
-
-            await interaction.reply({
-
-                content:
-                    `❌ You have already used **${choices[selectedChoice]}** ` +
-                    `for **${otherCharacter.name}**.\n\n` +
-                    `Each option can only be used once. ` +
-                    `Change your existing ${choices[selectedChoice]} choice first.`,
-
-                ephemeral: true
-
-            });
+            await interaction.deferUpdate();
 
             return;
         }
 
-        // Save the selection
-        userSelections[characterId] =
-            selectedChoice;
+        userSelections[characterId] = selectedChoice;
 
         selections.set(userId, userSelections);
 
-        // Check whether all five characters have choices
-        const complete =
-            characters.every(character =>
-                userSelections[character.id]
-            );
+        // Update the public poll silently
+        await interaction.deferUpdate();
+
+        return;
+    }
+
+    // -------------------------
+    // CONFIRM
+    // -------------------------
+
+    if (interaction.isButton()) {
+
+        if (interaction.customId !== 'confirm_vote') return;
+
+        const userId = interaction.user.id;
+
+        const userSelections =
+            selections.get(userId) || {};
+
+        // Check all five characters
+        const complete = characters.every(character =>
+            userSelections[character.id]
+        );
 
         if (!complete) {
 
-            const remaining =
-                characters.filter(character =>
-                    !userSelections[character.id]
-                );
-
             await interaction.reply({
-
                 content:
-                    `✅ **${characters.find(c => c.id === characterId).name}** ` +
-                    `set to **${choices[selectedChoice]}**.\n\n` +
-                    `You still need to choose for: **${remaining.map(c => c.name).join(', ')}**.`,
-
+                    '❌ Please choose an option for all five characters before confirming your vote.',
                 ephemeral: true
-
             });
 
             return;
         }
 
-        // --------------------------------------------------
-        // SUBMIT COMPLETE VOTE
-        // --------------------------------------------------
+        // Check each choice is unique
+        const usedChoices =
+            Object.values(userSelections);
 
-        votes.set(userId, { ...userSelections });
+        const uniqueChoices =
+            new Set(usedChoices);
 
-        await interaction.reply({
+        if (uniqueChoices.size !== 5) {
 
-            content:
-                '🎉 **Your complete vote has been submitted!**\n\n' +
-                characters.map(character =>
-                    `**${character.name}:** ${choices[userSelections[character.id]]}`
-                ).join('\n'),
+            await interaction.reply({
+                content:
+                    '❌ Each option must be used exactly once.',
+                ephemeral: true
+            });
 
-            ephemeral: true
+            return;
+        }
 
+        // Save vote
+        votes.set(userId, {
+            ...userSelections
         });
 
-        // Update results message if possible
-        await updateResults(interaction);
+        await interaction.reply({
+            content:
+                '✅ **Your vote has been submitted!**',
+            ephemeral: true
+        });
 
+        await updateResults();
+
+        return;
     }
-
 });
 
-// --------------------------------------------------
-// UPDATE RESULTS
-// --------------------------------------------------
+// -------------------------
+// POLL EMBED
+// -------------------------
 
-async function updateResults(interaction) {
+function createPollEmbed() {
+
+    return new EmbedBuilder()
+
+        .setTitle(
+            '😈 FRIEND-ZONE • SNOG • SMASH • MARRY • KILL'
+        )
+
+        .setDescription(
+            '**Assign one option to each character.**\n' +
+            '**Use each option exactly once.**\n' +
+            'You can change your choices before confirming your vote.\n\n' +
+            'When you are happy with your choices, press **✅ CONFIRM VOTE**.'
+        )
+
+        .setImage(imageUrl)
+
+        .addFields({
+            name: '📊 LIVE RESULTS',
+            value: createResultsText()
+        });
+}
+
+// -------------------------
+// DROPDOWNS + CONFIRM
+// -------------------------
+
+function createPollComponents() {
+
+    const rows = [];
+
+    for (const character of characters) {
+
+        const menu =
+            new StringSelectMenuBuilder()
+                .setCustomId(`character_${character.id}`)
+                .setPlaceholder(
+                    `${character.name} — Choose an option`
+                )
+                .addOptions(
+
+                    {
+                        label: 'FRIEND-ZONE',
+                        value: 'friendzone',
+                        emoji: '💙'
+                    },
+
+                    {
+                        label: 'SNOG',
+                        value: 'snog',
+                        emoji: '😘'
+                    },
+
+                    {
+                        label: 'SMASH',
+                        value: 'smash',
+                        emoji: '🔥'
+                    },
+
+                    {
+                        label: 'MARRY',
+                        value: 'marry',
+                        emoji: '💍'
+                    },
+
+                    {
+                        label: 'KILL',
+                        value: 'kill',
+                        emoji: '💀'
+                    }
+                );
+
+        rows.push(
+            new ActionRowBuilder()
+                .addComponents(menu)
+        );
+    }
+
+    return rows;
+}
+
+// -------------------------
+// RESULTS
+// -------------------------
+
+function createResultsText() {
 
     const totals = {
         friendzone: 0,
@@ -296,27 +336,65 @@ async function updateResults(interaction) {
 
         for (const choice of Object.values(vote)) {
 
-            if (totals[choice] !== undefined) {
-                totals[choice]++;
-            }
-
+            totals[choice]++;
         }
-
     }
+
+    const max =
+        Math.max(...Object.values(totals), 1);
 
     const totalVotes = votes.size;
 
-    console.log(`Current completed votes: ${totalVotes}`);
+    return Object.entries(totals)
+        .map(([choice, total]) => {
 
-    console.log(
-        `Friend-zone: ${totals.friendzone} | ` +
-        `Snog: ${totals.snog} | ` +
-        `Smash: ${totals.smash} | ` +
-        `Marry: ${totals.marry} | ` +
-        `Kill: ${totals.kill}`
-    );
+            const bars =
+                Math.round((total / max) * 10);
+
+            const filled =
+                '█'.repeat(bars);
+
+            const empty =
+                '░'.repeat(10 - bars);
+
+            return (
+                `${choiceEmoji[choice]} **${choices[choice].replace(choiceEmoji[choice] + ' ', '')}**\n` +
+                `${filled}${empty} **${total}**`
+            );
+
+        })
+        .join('\n\n') +
+
+        `\n\n👥 **${totalVotes} completed vote${totalVotes === 1 ? '' : 's'}**`;
 }
 
-// --------------------------------------------------
+// -------------------------
+// UPDATE RESULTS
+// -------------------------
+
+async function updateResults() {
+
+    if (!pollMessage) return;
+
+    try {
+
+        await pollMessage.edit({
+            embeds: [
+                createPollEmbed()
+            ],
+            components: createPollComponents()
+        });
+
+    } catch (error) {
+
+        console.error(
+            'Could not update poll:',
+            error
+        );
+
+    }
+}
+
+// -------------------------
 
 client.login(process.env.DISCORD_TOKEN);
