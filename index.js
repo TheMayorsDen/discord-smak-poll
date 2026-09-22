@@ -10,6 +10,8 @@ const {
     EmbedBuilder
 } = require('discord.js');
 
+const http = require('http');
+
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds
@@ -47,7 +49,7 @@ client.on('interactionCreate', async interaction => {
         const embed = new EmbedBuilder()
             .setTitle('😈 SNOG • MARRY • AVOID • KILL')
             .setDescription(
-                'Our first test poll is working!\\n\\n' +
+                'Our first test poll is working!\n\n' +
                 'The full character images and voting system will be added next.'
             );
 
@@ -79,6 +81,16 @@ client.on('interactionCreate', async interaction => {
             components: [row]
         });
     }
+});
+
+// Small web server required by Render
+const port = process.env.PORT || 3000;
+
+http.createServer((req, res) => {
+    res.writeHead(200);
+    res.end('MayorBot is running.');
+}).listen(port, () => {
+    console.log(`Web server listening on port ${port}`);
 });
 
 client.login(process.env.DISCORD_TOKEN);
