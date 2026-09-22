@@ -1,4 +1,5 @@
 const http = require('http');
+const sharp = require('sharp');
 
 const {
     Client,
@@ -10,7 +11,7 @@ const {
     StringSelectMenuBuilder,
     ButtonBuilder,
     ButtonStyle,
-    EmbedBuilder
+    AttachmentBuilder
 } = require('discord.js');
 
 const client = new Client({
@@ -26,10 +27,6 @@ http.createServer((req, res) => {
     console.log(`Web server listening on port ${port}`);
 });
 
-// -------------------------
-// POLL
-// -------------------------
-
 const imageUrl =
     'https://raw.githubusercontent.com/TheMayorsDen/discord-smak-poll/main/smak_five_character_panel.png';
 
@@ -41,44 +38,24 @@ const characters = [
     { id: 'zack', name: 'ZACK' }
 ];
 
-const choices = {
-    friendzone: '💙 FRIEND-ZONE',
-    snog: '😘 SNOG',
-    smash: '🔥 SMASH',
-    marry: '💍 MARRY',
-    kill: '💀 KILL'
-};
+const choices = [
+    { value: 'friendzone', label: 'FRIEND-ZONE' },
+    { value: 'snog', label: 'SNOG' },
+    { value: 'smash', label: 'SMASH' },
+    { value: 'marry', label: 'MARRY' },
+    { value: 'kill', label: 'KILL' }
+];
 
-const choiceEmoji = {
-    friendzone: '💙',
-    snog: '😘',
-    smash: '🔥',
-    marry: '💍',
-    kill: '💀'
-};
-
-// Temporary selections while users are voting
 const selections = new Map();
-
-// Completed votes
 const votes = new Map();
 
-// The Discord message containing the poll
 let pollMessage = null;
-
-// -------------------------
-// COMMAND
-// -------------------------
 
 const commands = [
     new SlashCommandBuilder()
         .setName('poll')
         .setDescription('Create the S.M.A.K. poll')
 ].map(command => command.toJSON());
-
-// -------------------------
-// READY
-// -------------------------
 
 client.once('ready', async () => {
 
@@ -103,25 +80,41 @@ client.once('ready', async () => {
     }
 });
 
-// -------------------------
-// CREATE POLL
-// -------------------------
-
 client.on('interactionCreate', async interaction => {
+
+    // -------------------------
+    // /poll
+    // -------------------------
 
     if (interaction.isChatInputCommand()) {
 
         if (interaction.commandName !== 'poll') return;
 
-        const embed = createPollEmbed();
+        votes.clear();
+        selections.clear();
 
-        const components = createPollComponents();
+        const image = await createResultsImage();
 
-        const message = await interaction.reply({
-            embeds: [embed],
-            components,
-            fetchReply: true
-        });
+        const castButton =
+            new ActionRowBuilder()
+                .addComponents(
+                    new ButtonBuilder()
+                        .setCustomId('cast_vote')
+                        .setLabel('CAST YOUR VOTE')
+                        .setEmoji('🗳️')
+                        .setStyle(ButtonStyle.Primary)
+                );
+
+        const message =
+            await interaction.reply({
+                files: [
+                    new AttachmentBuilder(image, {
+                        name: 'smak-results.png'
+                    })
+                ],
+                components: [castButton],
+                fetchReply: true
+            });
 
         pollMessage = message;
 
@@ -129,7 +122,104 @@ client.on('interactionCreate', async interaction => {
     }
 
     // -------------------------
-    // DROPDOWN
+    // BUTTONS
+    // -------------------------
+
+    if (interaction.isButton()) {
+
+        // CAST VOTE
+
+        if (interaction.customId === 'cast_vote') {
+
+            const userId = interaction.user.id;
+
+            const current =
+                selections.get(userId) || {};
+
+            await interaction.reply({
+                content:
+                    'Choose one option for each character.',
+                components:
+                    buildVoteComponents(current),
+                ephemeral: true
+            });
+
+            return;
+        }
+
+        // CONFIRM
+
+        if (interaction.customId === 'confirm_vote') {
+
+            const userId = interaction.user.id;
+
+            const current =
+                selections.get(userId) || {};
+
+            if (Object.keys(current).length !== 5) {
+
+                await interaction.reply({
+                    content:
+                        '❌ Choose all five characters first.',
+                    ephemeral: true
+                });
+
+                return;
+            }
+
+            if (
+                new Set(
+                    Object.values(current)
+                ).size !== 5
+            ) {
+
+                await interaction.reply({
+                    content:
+                        '❌ Each option must be used exactly once.',
+                    ephemeral: true
+                });
+
+                return;
+            }
+
+            votes.set(
+                userId,
+                { ...current }
+            );
+
+            await interaction.update({
+                content:
+                    '✅ Vote confirmed.',
+                components: []
+            });
+
+            await updatePublicResults();
+
+            return;
+        }
+
+        // CHANGE CHOICES
+
+        if (interaction.customId === 'change_choices') {
+
+            const userId = interaction.user.id;
+
+            const current =
+                selections.get(userId) || {};
+
+            await interaction.update({
+                content:
+                    'Choose one option for each character.',
+                components:
+                    buildVoteComponents(current)
+            });
+
+            return;
+        }
+    }
+
+    // -------------------------
+    // DROPDOWNS
     // -------------------------
 
     if (interaction.isStringSelectMenu()) {
@@ -137,176 +227,75 @@ client.on('interactionCreate', async interaction => {
         const userId = interaction.user.id;
 
         const characterId =
-            interaction.customId.replace('character_', '');
-
-        const selectedChoice =
-            interaction.values[0];
-
-        let userSelections =
-            selections.get(userId) || {};
-
-        // Check duplicate choice
-        const duplicate = Object.entries(userSelections)
-            .find(([character, choice]) =>
-                character !== characterId &&
-                choice === selectedChoice
+            interaction.customId.replace(
+                'character_',
+                ''
             );
 
-        if (duplicate) {
+        const selected =
+            interaction.values[0];
 
-            await interaction.deferUpdate();
+        const current = {
+            ...(selections.get(userId) || {})
+        };
 
-            return;
-        }
+        current[characterId] = selected;
 
-        userSelections[characterId] = selectedChoice;
-
-        selections.set(userId, userSelections);
-
-        // Update the public poll silently
-        await interaction.deferUpdate();
-
-        return;
-    }
-
-    // -------------------------
-    // CONFIRM
-    // -------------------------
-
-    if (interaction.isButton()) {
-
-        if (interaction.customId !== 'confirm_vote') return;
-
-        const userId = interaction.user.id;
-
-        const userSelections =
-            selections.get(userId) || {};
-
-        // Check all five characters
-        const complete = characters.every(character =>
-            userSelections[character.id]
+        selections.set(
+            userId,
+            current
         );
 
-        if (!complete) {
-
-            await interaction.reply({
-                content:
-                    '❌ Please choose an option for all five characters before confirming your vote.',
-                ephemeral: true
-            });
-
-            return;
-        }
-
-        // Check each choice is unique
-        const usedChoices =
-            Object.values(userSelections);
-
-        const uniqueChoices =
-            new Set(usedChoices);
-
-        if (uniqueChoices.size !== 5) {
-
-            await interaction.reply({
-                content:
-                    '❌ Each option must be used exactly once.',
-                ephemeral: true
-            });
-
-            return;
-        }
-
-        // Save vote
-        votes.set(userId, {
-            ...userSelections
-        });
-
-        await interaction.reply({
+        await interaction.update({
             content:
-                '✅ **Your vote has been submitted!**',
-            ephemeral: true
+                'Choose one option for each character.',
+            components:
+                buildVoteComponents(current)
         });
-
-        await updateResults();
-
-        return;
     }
 });
 
 // -------------------------
-// POLL EMBED
+// VOTING DROPDOWNS
 // -------------------------
 
-function createPollEmbed() {
+function buildVoteComponents(current) {
 
-    return new EmbedBuilder()
-
-        .setTitle(
-            '😈 FRIEND-ZONE • SNOG • SMASH • MARRY • KILL'
-        )
-
-        .setDescription(
-            '**Assign one option to each character.**\n' +
-            '**Use each option exactly once.**\n' +
-            'You can change your choices before confirming your vote.\n\n' +
-            'When you are happy with your choices, press **✅ CONFIRM VOTE**.'
-        )
-
-        .setImage(imageUrl)
-
-        .addFields({
-            name: '📊 LIVE RESULTS',
-            value: createResultsText()
-        });
-}
-
-// -------------------------
-// DROPDOWNS + CONFIRM
-// -------------------------
-
-function createPollComponents() {
+    const used =
+        new Set(
+            Object.values(current)
+        );
 
     const rows = [];
 
     for (const character of characters) {
 
+        const selected =
+            current[character.id];
+
+        const available =
+            choices.filter(choice =>
+                !used.has(choice.value) ||
+                choice.value === selected
+            );
+
         const menu =
             new StringSelectMenuBuilder()
-                .setCustomId(`character_${character.id}`)
+                .setCustomId(
+                    `character_${character.id}`
+                )
                 .setPlaceholder(
-                    `${character.name} — Choose an option`
+                    selected
+                        ? `${character.name} — ${choices.find(c => c.value === selected).label}`
+                        : `${character.name} — Choose one`
                 )
                 .addOptions(
-
-                    {
-                        label: 'FRIEND-ZONE',
-                        value: 'friendzone',
-                        emoji: '💙'
-                    },
-
-                    {
-                        label: 'SNOG',
-                        value: 'snog',
-                        emoji: '😘'
-                    },
-
-                    {
-                        label: 'SMASH',
-                        value: 'smash',
-                        emoji: '🔥'
-                    },
-
-                    {
-                        label: 'MARRY',
-                        value: 'marry',
-                        emoji: '💍'
-                    },
-
-                    {
-                        label: 'KILL',
-                        value: 'kill',
-                        emoji: '💀'
-                    }
+                    available.map(choice => ({
+                        label: choice.label,
+                        value: choice.value,
+                        default:
+                            choice.value === selected
+                    }))
                 );
 
         rows.push(
@@ -315,86 +304,274 @@ function createPollComponents() {
         );
     }
 
+    const complete =
+        Object.keys(current).length === 5 &&
+        new Set(
+            Object.values(current)
+        ).size === 5;
+
+    if (complete) {
+
+        rows.pop();
+
+        rows.push(
+            new ActionRowBuilder()
+                .addComponents(
+
+                    new ButtonBuilder()
+                        .setCustomId(
+                            'change_choices'
+                        )
+                        .setLabel(
+                            'CHANGE CHOICES'
+                        )
+                        .setEmoji('✏️')
+                        .setStyle(
+                            ButtonStyle.Secondary
+                        ),
+
+                    new ButtonBuilder()
+                        .setCustomId(
+                            'confirm_vote'
+                        )
+                        .setLabel(
+                            'CONFIRM VOTE'
+                        )
+                        .setEmoji('✅')
+                        .setStyle(
+                            ButtonStyle.Success
+                        )
+                )
+        );
+    }
+
     return rows;
 }
 
 // -------------------------
-// RESULTS
+// CREATE RESULTS IMAGE
 // -------------------------
 
-function createResultsText() {
+async function createResultsImage() {
 
-    const totals = {
-        friendzone: 0,
-        snog: 0,
-        smash: 0,
-        marry: 0,
-        kill: 0
-    };
+    const response =
+        await fetch(imageUrl);
 
-    for (const vote of votes.values()) {
+    const baseBuffer =
+        Buffer.from(
+            await response.arrayBuffer()
+        );
 
-        for (const choice of Object.values(vote)) {
+    const counts = {};
 
-            totals[choice]++;
+    for (const choice of choices) {
+
+        counts[choice.value] = {};
+
+        for (const character of characters) {
+
+            counts[choice.value][character.id] = 0;
         }
     }
 
-    const max =
-        Math.max(...Object.values(totals), 1);
+    for (const vote of votes.values()) {
 
-    const totalVotes = votes.size;
+        for (const character of characters) {
 
-    return Object.entries(totals)
-        .map(([choice, total]) => {
+            const choice =
+                vote[character.id];
 
-            const bars =
-                Math.round((total / max) * 10);
+            if (
+                choice &&
+                counts[choice]
+            ) {
 
-            const filled =
-                '█'.repeat(bars);
+                counts[choice][character.id]++;
+            }
+        }
+    }
 
-            const empty =
-                '░'.repeat(10 - bars);
+    const characterCenters = [
+        192,
+        576,
+        960,
+        1344,
+        1728
+    ];
 
-            return (
-                `${choiceEmoji[choice]} **${choices[choice].replace(choiceEmoji[choice] + ' ', '')}**\n` +
-                `${filled}${empty} **${total}**`
+    const positions =
+        Array.from(
+            { length: 5 },
+            () => []
+        );
+
+    choices.forEach((choice, index) => {
+
+        let winnerIndex = index;
+        let highest = -1;
+
+        characters.forEach(
+            (character, characterIndex) => {
+
+                const value =
+                    counts[
+                        choice.value
+                    ][character.id];
+
+                if (value > highest) {
+
+                    highest = value;
+                    winnerIndex =
+                        characterIndex;
+                }
+            }
+        );
+
+        positions[winnerIndex].push({
+            label:
+                `${choice.label}  ${highest}`
+        });
+    });
+
+    let labels = '';
+
+    positions.forEach(
+        (items, characterIndex) => {
+
+            items.forEach(
+                (item, stackIndex) => {
+
+                    const x =
+                        characterCenters[
+                            characterIndex
+                        ];
+
+                    const y =
+                        22 +
+                        stackIndex * 54;
+
+                    const width =
+                        Math.max(
+                            170,
+                            item.label.length * 13 + 38
+                        );
+
+                    const left =
+                        x - width / 2;
+
+                    labels += `
+                        <rect
+                            x="${left}"
+                            y="${y}"
+                            width="${width}"
+                            height="42"
+                            rx="21"
+                            fill="#111217"
+                            fill-opacity="0.94"
+                        />
+
+                        <text
+                            x="${x}"
+                            y="${y + 28}"
+                            text-anchor="middle"
+                            font-family="Arial, sans-serif"
+                            font-size="22"
+                            font-weight="700"
+                            fill="white"
+                        >
+                            ${escapeXml(item.label)}
+                        </text>
+                    `;
+                }
             );
+        }
+    );
 
+    const svg =
+        Buffer.from(`
+            <svg
+                width="1920"
+                height="1320"
+                xmlns="http://www.w3.org/2000/svg"
+            >
+                <rect
+                    width="1920"
+                    height="1320"
+                    fill="#14151b"
+                />
+
+                ${labels}
+
+            </svg>
+        `);
+
+    return sharp(baseBuffer)
+        .extend({
+            top: 240,
+            bottom: 0,
+            left: 0,
+            right: 0,
+            background: '#14151b'
         })
-        .join('\n\n') +
-
-        `\n\n👥 **${totalVotes} completed vote${totalVotes === 1 ? '' : 's'}**`;
+        .composite([
+            {
+                input: svg,
+                top: 0,
+                left: 0
+            }
+        ])
+        .png()
+        .toBuffer();
 }
 
 // -------------------------
-// UPDATE RESULTS
+// XML SAFETY
 // -------------------------
 
-async function updateResults() {
+function escapeXml(value) {
+
+    return value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+}
+
+// -------------------------
+// UPDATE PUBLIC IMAGE
+// -------------------------
+
+async function updatePublicResults() {
 
     if (!pollMessage) return;
 
     try {
 
+        const image =
+            await createResultsImage();
+
         await pollMessage.edit({
-            embeds: [
-                createPollEmbed()
-            ],
-            components: createPollComponents()
+            files: [
+                new AttachmentBuilder(
+                    image,
+                    {
+                        name:
+                            'smak-results.png'
+                    }
+                )
+            ]
         });
 
     } catch (error) {
 
         console.error(
-            'Could not update poll:',
+            'Could not update results:',
             error
         );
-
     }
 }
 
-// -------------------------
-
-client.login(process.env.DISCORD_TOKEN);
+client.login(
+    process.env.DISCORD_TOKEN
+);
