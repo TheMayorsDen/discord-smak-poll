@@ -58,76 +58,75 @@ const commands = [
 ].map(command => command.toJSON());
 
 client.once('ready', async () => {
-
     console.log(`Logged in as ${client.user.tag}`);
 
     const rest = new REST({ version: '10' })
         .setToken(process.env.DISCORD_TOKEN);
 
     try {
-
         await rest.put(
             Routes.applicationCommands(client.user.id),
             { body: commands }
         );
 
         console.log('Slash command registered successfully.');
-
     } catch (error) {
-
         console.error(error);
-
     }
 });
 
 client.on('interactionCreate', async interaction => {
 
-    // -------------------------
     // /poll
-    // -------------------------
+    if (interaction.isChatInputCommand()) {
 
-if (interaction.commandName !== 'poll') return;
+        if (interaction.commandName !== 'poll') return;
 
-await interaction.deferReply();
+        try {
+            await interaction.deferReply();
 
-votes.clear();
-selections.clear();
+            votes.clear();
+            selections.clear();
 
-const image = await createResultsImage();
+            const image = await createResultsImage();
 
-        const castButton =
-            new ActionRowBuilder()
-                .addComponents(
-                    new ButtonBuilder()
-                        .setCustomId('cast_vote')
-                        .setLabel('CAST YOUR VOTE')
-                        .setEmoji('🗳️')
-                        .setStyle(ButtonStyle.Primary)
-                );
+            const castButton =
+                new ActionRowBuilder()
+                    .addComponents(
+                        new ButtonBuilder()
+                            .setCustomId('cast_vote')
+                            .setLabel('CAST YOUR VOTE')
+                            .setEmoji('🗳️')
+                            .setStyle(ButtonStyle.Primary)
+                    );
 
-const message =
-    await interaction.editReply({
-                files: [
-                    new AttachmentBuilder(image, {
-                        name: 'smak-results.png'
-                    })
-                ],
-                components: [castButton],
-                fetchReply: true
-            });
+            const message =
+                await interaction.editReply({
+                    files: [
+                        new AttachmentBuilder(image, {
+                            name: 'smak-results.png'
+                        })
+                    ],
+                    components: [castButton]
+                });
 
-        pollMessage = message;
+            pollMessage = message;
+
+        } catch (error) {
+            console.error('Poll creation error:', error);
+
+            if (interaction.deferred || interaction.replied) {
+                await interaction.editReply({
+                    content: '❌ Something went wrong creating the poll.'
+                }).catch(() => {});
+            }
+        }
 
         return;
     }
 
-    // -------------------------
     // BUTTONS
-    // -------------------------
-
     if (interaction.isButton()) {
-
-        // CAST VOTE
 
         if (interaction.customId === 'cast_vote') {
 
@@ -146,8 +145,6 @@ const message =
 
             return;
         }
-
-        // CONFIRM
 
         if (interaction.customId === 'confirm_vote') {
 
@@ -198,8 +195,6 @@ const message =
             return;
         }
 
-        // CHANGE CHOICES
-
         if (interaction.customId === 'change_choices') {
 
             const userId = interaction.user.id;
@@ -218,10 +213,7 @@ const message =
         }
     }
 
-    // -------------------------
     // DROPDOWNS
-    // -------------------------
-
     if (interaction.isStringSelectMenu()) {
 
         const userId = interaction.user.id;
@@ -255,10 +247,7 @@ const message =
     }
 });
 
-// -------------------------
 // VOTING DROPDOWNS
-// -------------------------
-
 function buildVoteComponents(current) {
 
     const used =
@@ -348,14 +337,17 @@ function buildVoteComponents(current) {
     return rows;
 }
 
-// -------------------------
 // CREATE RESULTS IMAGE
-// -------------------------
-
 async function createResultsImage() {
 
     const response =
         await fetch(imageUrl);
+
+    if (!response.ok) {
+        throw new Error(
+            `Could not download image: ${response.status}`
+        );
+    }
 
     const baseBuffer =
         Buffer.from(
@@ -524,10 +516,6 @@ async function createResultsImage() {
         .toBuffer();
 }
 
-// -------------------------
-// XML SAFETY
-// -------------------------
-
 function escapeXml(value) {
 
     return value
@@ -537,10 +525,6 @@ function escapeXml(value) {
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&apos;');
 }
-
-// -------------------------
-// UPDATE PUBLIC IMAGE
-// -------------------------
 
 async function updatePublicResults() {
 
