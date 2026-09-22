@@ -1,3 +1,5 @@
+const http = require('http');
+
 const {
     Client,
     GatewayIntentBits,
@@ -10,12 +12,19 @@ const {
     EmbedBuilder
 } = require('discord.js');
 
-const http = require('http');
-
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds
     ]
+});
+
+const port = process.env.PORT || 3000;
+
+http.createServer((req, res) => {
+    res.writeHead(200);
+    res.end('MayorBot is running.');
+}).listen(port, () => {
+    console.log(`Web server listening on port ${port}`);
 });
 
 const commands = [
@@ -43,54 +52,71 @@ client.once('ready', async () => {
 });
 
 client.on('interactionCreate', async interaction => {
-    if (!interaction.isChatInputCommand()) return;
 
-    if (interaction.commandName === 'poll') {
-        const embed = new EmbedBuilder()
-            .setTitle('😈 SNOG • MARRY • AVOID • KILL')
-            .setDescription(
-                'Our first test poll is working!\n\n' +
-                'The full character images and voting system will be added next.'
-            );
+    // /poll command
+    if (interaction.isChatInputCommand()) {
 
-        const row = new ActionRowBuilder()
-            .addComponents(
-                new ButtonBuilder()
-                    .setCustomId('snog')
-                    .setLabel('😘 SNOG')
-                    .setStyle(ButtonStyle.Primary),
+        if (interaction.commandName === 'poll') {
 
-                new ButtonBuilder()
-                    .setCustomId('marry')
-                    .setLabel('💍 MARRY')
-                    .setStyle(ButtonStyle.Success),
+            const embed = new EmbedBuilder()
+                .setTitle('😈 SNOG • MARRY • AVOID • KILL')
+                .setDescription(
+                    'Choose one of the four options below.'
+                );
 
-                new ButtonBuilder()
-                    .setCustomId('avoid')
-                    .setLabel('🚫 AVOID')
-                    .setStyle(ButtonStyle.Secondary),
+            const row = new ActionRowBuilder()
+                .addComponents(
 
-                new ButtonBuilder()
-                    .setCustomId('kill')
-                    .setLabel('💀 KILL')
-                    .setStyle(ButtonStyle.Danger)
-            );
+                    new ButtonBuilder()
+                        .setCustomId('snog')
+                        .setLabel('😘 SNOG')
+                        .setStyle(ButtonStyle.Primary),
+
+                    new ButtonBuilder()
+                        .setCustomId('marry')
+                        .setLabel('💍 MARRY')
+                        .setStyle(ButtonStyle.Success),
+
+                    new ButtonBuilder()
+                        .setCustomId('avoid')
+                        .setLabel('🚫 AVOID')
+                        .setStyle(ButtonStyle.Secondary),
+
+                    new ButtonBuilder()
+                        .setCustomId('kill')
+                        .setLabel('💀 KILL')
+                        .setStyle(ButtonStyle.Danger)
+
+                );
+
+            await interaction.reply({
+                embeds: [embed],
+                components: [row]
+            });
+        }
+
+        return;
+    }
+
+    // Button clicks
+    if (interaction.isButton()) {
+
+        const choices = {
+            snog: '😘 SNOG',
+            marry: '💍 MARRY',
+            avoid: '🚫 AVOID',
+            kill: '💀 KILL'
+        };
+
+        const choice = choices[interaction.customId];
+
+        if (!choice) return;
 
         await interaction.reply({
-            embeds: [embed],
-            components: [row]
+            content: `You selected **${choice}**.`,
+            ephemeral: true
         });
     }
-});
-
-// Small web server required by Render
-const port = process.env.PORT || 3000;
-
-http.createServer((req, res) => {
-    res.writeHead(200);
-    res.end('MayorBot is running.');
-}).listen(port, () => {
-    console.log(`Web server listening on port ${port}`);
 });
 
 client.login(process.env.DISCORD_TOKEN);
