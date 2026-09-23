@@ -37,7 +37,6 @@ let selections = new Map();
 
 let baseImageBuffer = null;
 let publicPollMessage = null;
-let controlMessage = null;
 let stateMessageId = null;
 let baseImageMessageId = null;
 let closeTimer = null;
@@ -50,8 +49,18 @@ function clean(value) {
   return String(value || "").trim();
 }
 
+function cleanSymbol(value) {
+  const text = clean(value);
+
+  const markdown =
+    text.match(/^\[([^\]]+)\]\([^)]+\)$/);
+
+  return markdown ? markdown[1] : text;
+}
+
 function truncate(value, max) {
   const text = clean(value);
+
   return text.length > max
     ? text.slice(0, max - 1) + "…"
     : text;
@@ -70,14 +79,20 @@ async function downloadBuffer(url) {
   const response = await fetch(url);
 
   if (!response.ok) {
-    throw new Error(`Image download failed: ${response.status}`);
+    throw new Error(
+      `Image download failed: ${response.status}`
+    );
   }
 
-  return Buffer.from(await response.arrayBuffer());
+  return Buffer.from(
+    await response.arrayBuffer()
+  );
 }
 
 async function getDataChannel() {
-  return await client.channels.fetch(POLL_DATA_CHANNEL_ID);
+  return await client.channels.fetch(
+    POLL_DATA_CHANNEL_ID
+  );
 }
 
 async function getAllDataMessages() {
@@ -87,16 +102,21 @@ async function getAllDataMessages() {
   let before;
 
   while (true) {
-    const batch = await channel.messages.fetch({
-      limit: 100,
-      before,
-    });
+    const batch =
+      await channel.messages.fetch({
+        limit: 100,
+        before,
+      });
 
-    if (!batch.size) break;
+    if (!batch.size) {
+      break;
+    }
 
     messages.push(...batch.values());
 
-    if (batch.size < 100) break;
+    if (batch.size < 100) {
+      break;
+    }
 
     before = batch.last().id;
   }
@@ -111,12 +131,22 @@ function getCounts() {
   );
 
   for (const vote of votes.values()) {
-    if (!vote.choices) continue;
+    if (!vote.choices) {
+      continue;
+    }
 
-    for (let character = 0; character < 5; character++) {
-      const option = vote.choices[character];
+    for (
+      let character = 0;
+      character < 5;
+      character++
+    ) {
+      const option =
+        vote.choices[character];
 
-      if (option >= 0 && option < 5) {
+      if (
+        option >= 0 &&
+        option < 5
+      ) {
         counts[option][character]++;
       }
     }
@@ -125,27 +155,33 @@ function getCounts() {
   return counts;
 }
 
-/*
- * Finds the most-voted category FOR EACH CHARACTER.
- *
- * If two or more categories are tied for first place,
- * all tied categories are displayed above that character.
- */
 function getCharacterLeaders(counts) {
   const leaders = [];
 
-  for (let character = 0; character < 5; character++) {
+  for (
+    let character = 0;
+    character < 5;
+    character++
+  ) {
     let highest = 0;
     const winningOptions = [];
 
-    for (let option = 0; option < 5; option++) {
-      const count = counts[option][character];
+    for (
+      let option = 0;
+      option < 5;
+      option++
+    ) {
+      const count =
+        counts[option][character];
 
       if (count > highest) {
         highest = count;
         winningOptions.length = 0;
         winningOptions.push(option);
-      } else if (count > 0 && count === highest) {
+      } else if (
+        count > 0 &&
+        count === highest
+      ) {
         winningOptions.push(option);
       }
     }
@@ -159,14 +195,25 @@ function getCharacterLeaders(counts) {
 function textSize(text, width) {
   const length = text.length;
 
-  if (length <= 12) return Math.min(25, width / 8);
-  if (length <= 20) return Math.min(20, width / 10);
-  if (length <= 30) return Math.min(16, width / 12);
+  if (length <= 12) {
+    return Math.min(25, width / 8);
+  }
+
+  if (length <= 20) {
+    return Math.min(20, width / 10);
+  }
+
+  if (length <= 30) {
+    return Math.min(16, width / 12);
+  }
 
   return Math.min(13, width / 15);
 }
 
-function buildOverlaySvg(counts, leaders) {
+function buildOverlaySvg(
+  counts,
+  leaders
+) {
   const width =
     IMAGE_WIDTH * 5 +
     GAP * 4;
@@ -182,7 +229,6 @@ function buildOverlaySvg(counts, leaders) {
       height="${height}"
       xmlns="http://www.w3.org/2000/svg"
     >
-
       <rect
         width="${width}"
         height="${height}"
@@ -191,16 +237,28 @@ function buildOverlaySvg(counts, leaders) {
   `;
 
   /*
-   * TOP
-   * Most-voted category for each character.
+   * TOP:
+   * Winning category for each character.
+   *
+   * If categories are tied, all tied
+   * categories are shown.
    */
-  for (let character = 0; character < 5; character++) {
-    const winningOptions = leaders[character];
 
-    if (!winningOptions.length) continue;
+  for (
+    let character = 0;
+    character < 5;
+    character++
+  ) {
+    const winningOptions =
+      leaders[character];
+
+    if (!winningOptions.length) {
+      continue;
+    }
 
     const sectionX =
-      character * (IMAGE_WIDTH + GAP);
+      character *
+      (IMAGE_WIDTH + GAP);
 
     const availableWidth =
       IMAGE_WIDTH - 20;
@@ -210,53 +268,64 @@ function buildOverlaySvg(counts, leaders) {
     const badgeWidth =
       (
         availableWidth -
-        badgeGap * (winningOptions.length - 1)
-      ) / winningOptions.length;
+        badgeGap *
+          (winningOptions.length - 1)
+      ) /
+      winningOptions.length;
 
-    winningOptions.forEach((option, index) => {
-      const x =
-        sectionX +
-        10 +
-        index * (badgeWidth + badgeGap);
+    winningOptions.forEach(
+      (option, index) => {
+        const x =
+          sectionX +
+          10 +
+          index *
+            (badgeWidth + badgeGap);
 
-      const label =
-        poll.resultLabels[option];
+        const label =
+          poll.resultLabels[option];
 
-      const fontSize =
-        textSize(label, badgeWidth);
+        const fontSize =
+          textSize(
+            label,
+            badgeWidth
+          );
 
-      svg += `
-        <rect
-          x="${x}"
-          y="15"
-          width="${badgeWidth}"
-          height="80"
-          rx="18"
-          fill="#242424"
-          stroke="#ffffff"
-          stroke-width="2"
-        />
+        svg += `
+          <rect
+            x="${x}"
+            y="15"
+            width="${badgeWidth}"
+            height="80"
+            rx="18"
+            fill="#242424"
+            stroke="#ffffff"
+            stroke-width="2"
+          />
 
-        <text
-          x="${x + badgeWidth / 2}"
-          y="55"
-          text-anchor="middle"
-          dominant-baseline="middle"
-          fill="white"
-          font-family="Arial, sans-serif"
-          font-size="${fontSize}px"
-          font-weight="700"
-        >
-          ${escapeSvg(truncate(label, 35))}
-        </text>
-      `;
-    });
+          <text
+            x="${x + badgeWidth / 2}"
+            y="55"
+            text-anchor="middle"
+            dominant-baseline="middle"
+            fill="white"
+            font-family="Arial, sans-serif"
+            font-size="${fontSize}px"
+            font-weight="700"
+          >
+            ${escapeSvg(
+              truncate(label, 35)
+            )}
+          </text>
+        `;
+      }
+    );
   }
 
   /*
-   * BOTTOM
-   * Symbol + total votes for each category.
+   * BOTTOM:
+   * Five symbols and their total vote count.
    */
+
   const bottomY =
     TOP_HEIGHT +
     IMAGE_HEIGHT;
@@ -264,10 +333,15 @@ function buildOverlaySvg(counts, leaders) {
   const cellWidth =
     width / 5;
 
-  for (let option = 0; option < 5; option++) {
+  for (
+    let option = 0;
+    option < 5;
+    option++
+  ) {
     const total =
       counts[option].reduce(
-        (sum, value) => sum + value,
+        (sum, value) =>
+          sum + value,
         0
       );
 
@@ -276,7 +350,9 @@ function buildOverlaySvg(counts, leaders) {
       cellWidth / 2;
 
     const symbol =
-      poll.symbols[option];
+      cleanSymbol(
+        poll.symbols[option]
+      );
 
     svg += `
       <text
@@ -285,7 +361,7 @@ function buildOverlaySvg(counts, leaders) {
         text-anchor="middle"
         dominant-baseline="middle"
         fill="white"
-        font-family="Arial, sans-serif"
+        font-family="Arial, Noto Color Emoji, Segoe UI Emoji, sans-serif"
         font-size="36px"
       >
         ${escapeSvg(symbol)}
@@ -306,15 +382,11 @@ function buildOverlaySvg(counts, leaders) {
     `;
   }
 
-  svg += `</svg>`;
+  svg += "</svg>";
 
   return Buffer.from(svg);
 }
 
-/*
- * Creates the clean five-character image.
- * This is what gets stored privately in #mayorbot-data.
- */
 async function buildBaseImage() {
   const width =
     IMAGE_WIDTH * 5 +
@@ -327,7 +399,9 @@ async function buildBaseImage() {
 
   const panels = [];
 
-  for (const character of poll.characters) {
+  for (
+    const character of poll.characters
+  ) {
     const image =
       await sharp(character.image)
         .resize(
@@ -355,13 +429,15 @@ async function buildBaseImage() {
     },
   })
     .composite(
-      panels.map((image, index) => ({
-        input: image,
-        left:
-          index *
-          (IMAGE_WIDTH + GAP),
-        top: TOP_HEIGHT,
-      }))
+      panels.map(
+        (image, index) => ({
+          input: image,
+          left:
+            index *
+            (IMAGE_WIDTH + GAP),
+          top: TOP_HEIGHT,
+        })
+      )
     )
     .jpeg({
       quality: 92,
@@ -370,10 +446,16 @@ async function buildBaseImage() {
 }
 
 async function buildPollImage() {
-  const counts = getCounts();
-  const leaders = getCharacterLeaders(counts);
+  const counts =
+    getCounts();
 
-  poll.characterLeaders = leaders;
+  const leaders =
+    getCharacterLeaders(
+      counts
+    );
+
+  poll.characterLeaders =
+    leaders;
 
   const overlay =
     buildOverlaySvg(
@@ -381,7 +463,9 @@ async function buildPollImage() {
       leaders
     );
 
-  return await sharp(baseImageBuffer)
+  return await sharp(
+    baseImageBuffer
+  )
     .composite([
       {
         input: overlay,
@@ -403,7 +487,8 @@ async function saveBaseImage() {
     new AttachmentBuilder(
       baseImageBuffer,
       {
-        name: "poll-base.jpg",
+        name:
+          "poll-base.jpg",
       }
     );
 
@@ -411,7 +496,9 @@ async function saveBaseImage() {
     await channel.send({
       content:
         `POLL_BASE|${poll.id}`,
-      files: [attachment],
+      files: [
+        attachment,
+      ],
     });
 
   baseImageMessageId =
@@ -433,13 +520,16 @@ async function saveVote(
       pollId: poll.id,
       userId,
       choices,
-      timestamp: Date.now(),
+      timestamp:
+        Date.now(),
     })}`
   );
 }
 
 async function saveState() {
-  if (!poll) return;
+  if (!poll) {
+    return;
+  }
 
   const channel =
     await getDataChannel();
@@ -456,9 +546,10 @@ async function saveState() {
   }
 
   const state = {
-    schemaVersion: 4,
+    schemaVersion: 5,
 
-    pollId: poll.id,
+    pollId:
+      poll.id,
 
     duration:
       poll.duration,
@@ -475,16 +566,14 @@ async function saveState() {
     publicMessageId:
       poll.publicMessageId,
 
-    controlMessageId:
-      poll.controlMessageId,
-
     baseImageMessageId:
       poll.baseImageMessageId,
 
     characters:
       poll.characters.map(
         (character) => ({
-          name: character.name,
+          name:
+            character.name,
         })
       ),
 
@@ -506,116 +595,260 @@ async function saveState() {
 
   const message =
     await channel.send(
-      `POLL_STATE|${JSON.stringify(state)}`
+      `POLL_STATE|${JSON.stringify(
+        state
+      )}`
     );
 
   stateMessageId =
     message.id;
 }
 
-function buildMenus(userId) {
+/*
+ * PUBLIC ROW 1
+ *
+ * Five character buttons.
+ *
+ * Discord allows a maximum of five
+ * buttons in one action row, so these
+ * are positioned horizontally across
+ * the poll.
+ */
+
+function buildCharacterButtons(
+  disabled = false
+) {
+  return new ActionRowBuilder()
+    .addComponents(
+      poll.characters.map(
+        (
+          character,
+          index
+        ) =>
+          new ButtonBuilder()
+            .setCustomId(
+              `character:${index}`
+            )
+            .setLabel(
+              truncate(
+                character.name,
+                20
+              )
+            )
+            .setStyle(
+              disabled
+                ? ButtonStyle.Secondary
+                : ButtonStyle.Primary
+            )
+            .setDisabled(
+              disabled
+            )
+      )
+    );
+}
+
+/*
+ * PUBLIC ROW 2
+ */
+
+function buildConfirmRow(
+  disabled = false
+) {
+  return new ActionRowBuilder()
+    .addComponents(
+      new ButtonBuilder()
+        .setCustomId(
+          "confirm"
+        )
+        .setLabel(
+          "CONFIRM VOTE"
+        )
+        .setStyle(
+          ButtonStyle.Success
+        )
+        .setDisabled(
+          disabled
+        ),
+
+      new ButtonBuilder()
+        .setCustomId(
+          "vote"
+        )
+        .setLabel(
+          "CHANGE VOTE"
+        )
+        .setStyle(
+          ButtonStyle.Secondary
+        )
+        .setDisabled(
+          disabled
+        )
+    );
+}
+
+/*
+ * PRIVATE CHARACTER BUTTONS
+ *
+ * These are shown to the voter after
+ * clicking VOTE / CHANGE VOTE.
+ */
+
+function buildPrivateCharacterButtons(
+  userId
+) {
   const current =
-    selections.get(userId) ||
+    selections.get(
+      userId
+    ) ||
     Array(5).fill(null);
 
-  return poll.characters.map(
-    (character, characterIndex) => {
-
-      const used =
-        new Set(
-          current.filter(
-            (value) =>
-              value !== null
-          )
-        );
-
-      const available =
-        poll.voteLabels
-          .map(
-            (label, optionIndex) => ({
-              label,
-              optionIndex,
-            })
-          )
-          .filter(
-            ({ optionIndex }) =>
-              !used.has(optionIndex) ||
-              current[characterIndex] ===
-                optionIndex
-          );
-
-      const menu =
-        new StringSelectMenuBuilder()
-          .setCustomId(
-            `choice:${characterIndex}`
-          )
-          .setPlaceholder(
-            `${truncate(
-              character.name,
-              32
-            )} — choose`
-          )
-          .addOptions(
-            available.map(
-              ({
-                label,
-                optionIndex,
-              }) =>
-                new StringSelectMenuOptionBuilder()
-                  .setLabel(
-                    truncate(
-                      label,
-                      100
-                    )
-                  )
-                  .setValue(
-                    String(optionIndex)
-                  )
-                  .setDefault(
-                    current[
-                      characterIndex
-                    ] === optionIndex
-                  )
+  return new ActionRowBuilder()
+    .addComponents(
+      poll.characters.map(
+        (
+          character,
+          index
+        ) =>
+          new ButtonBuilder()
+            .setCustomId(
+              `private-character:${index}`
             )
-          );
-
-      return new ActionRowBuilder()
-        .addComponents(menu);
-    }
-  );
+            .setLabel(
+              truncate(
+                character.name,
+                20
+              )
+            )
+            .setStyle(
+              current[index] === null
+                ? ButtonStyle.Primary
+                : ButtonStyle.Secondary
+            )
+      )
+    );
 }
 
-async function updatePublicImage() {
-  if (
-    !poll ||
-    !publicPollMessage
-  ) {
-    return;
-  }
+/*
+ * DROPDOWN FOR ONE CHARACTER
+ */
 
-  const image =
-    await buildPollImage();
+function buildCharacterMenu(
+  userId,
+  characterIndex
+) {
+  const current =
+    selections.get(
+      userId
+    ) ||
+    Array(5).fill(null);
 
-  const attachment =
-    new AttachmentBuilder(
-      image,
-      {
-        name:
-          "poll-results.jpg",
-      }
+  const currentChoice =
+    current[
+      characterIndex
+    ];
+
+  /*
+   * Categories already used by the
+   * other four characters cannot be
+   * selected here.
+   */
+  const usedByOthers =
+    new Set(
+      current.filter(
+        (
+          value,
+          index
+        ) =>
+          value !== null &&
+          index !==
+            characterIndex
+      )
     );
 
-  await publicPollMessage.edit({
-    content: null,
-    attachments: [],
-    files: [attachment],
-  });
+  const available =
+    poll.voteLabels
+      .map(
+        (
+          label,
+          optionIndex
+        ) => ({
+          label,
+          optionIndex,
+        })
+      )
+      .filter(
+        ({
+          optionIndex,
+        }) =>
+          !usedByOthers.has(
+            optionIndex
+          ) ||
+          optionIndex ===
+            currentChoice
+      );
+
+  const menu =
+    new StringSelectMenuBuilder()
+      .setCustomId(
+        `choice:${characterIndex}`
+      )
+      .setPlaceholder(
+        currentChoice === null
+          ? `Choose for ${truncate(
+              poll.characters[
+                characterIndex
+              ].name,
+              60
+            )}`
+          : `Current: ${truncate(
+              poll.voteLabels[
+                currentChoice
+              ],
+              70
+            )}`
+      )
+      .addOptions(
+        available.map(
+          ({
+            label,
+            optionIndex,
+          }) =>
+            new StringSelectMenuOptionBuilder()
+              .setLabel(
+                truncate(
+                  label,
+                  100
+                )
+              )
+              .setValue(
+                String(
+                  optionIndex
+                )
+              )
+              .setDefault(
+                currentChoice ===
+                  optionIndex
+              )
+        )
+      );
+
+  return new ActionRowBuilder()
+    .addComponents(
+      menu
+    );
 }
 
-async function openVote(interaction) {
+/*
+ * VOTE / CHANGE VOTE
+ */
+
+async function openVote(
+  interaction
+) {
   if (
     !poll ||
-    poll.status !== "active"
+    poll.status !==
+      "active"
   ) {
     return interaction.reply({
       content:
@@ -637,22 +870,146 @@ async function openVote(interaction) {
       : Array(5).fill(null)
   );
 
-  await interaction.reply({
-    components:
-      buildMenus(
+  const current =
+    selections.get(
+      interaction.user.id
+    );
+
+  const assigned =
+    current.filter(
+      (value) =>
+        value !== null
+    ).length;
+
+  return interaction.reply({
+    content:
+      `Your current vote: ${assigned}/5 characters assigned.\nClick a character button below to choose or change its category.`,
+
+    components: [
+      buildPrivateCharacterButtons(
         interaction.user.id
       ),
+    ],
+
     flags:
       MessageFlags.Ephemeral,
   });
 }
+
+/*
+ * OPEN ONE CHARACTER'S PRIVATE DROPDOWN
+ */
+
+async function openCharacterVote(
+  interaction,
+  characterIndex,
+  privateWindow = false
+) {
+  if (
+    !poll ||
+    poll.status !==
+      "active"
+  ) {
+    return interaction.reply({
+      content:
+        "This poll is closed.",
+      flags:
+        MessageFlags.Ephemeral,
+    });
+  }
+
+  if (
+    characterIndex < 0 ||
+    characterIndex >= 5
+  ) {
+    return interaction.reply({
+      content:
+        "Invalid character.",
+      flags:
+        MessageFlags.Ephemeral,
+    });
+  }
+
+  if (
+    !selections.has(
+      interaction.user.id
+    )
+  ) {
+    const previous =
+      votes.get(
+        interaction.user.id
+      );
+
+    selections.set(
+      interaction.user.id,
+      previous
+        ? [
+            ...previous.choices,
+          ]
+        : Array(5).fill(null)
+    );
+  }
+
+  const current =
+    selections.get(
+      interaction.user.id
+    );
+
+  const assigned =
+    current.filter(
+      (value) =>
+        value !== null
+    ).length;
+
+  const components = [
+    buildCharacterMenu(
+      interaction.user.id,
+      characterIndex
+    ),
+  ];
+
+  if (privateWindow) {
+    components.push(
+      buildPrivateCharacterButtons(
+        interaction.user.id
+      )
+    );
+  }
+
+  return interaction.reply({
+    content:
+      `${poll.characters[characterIndex].name}: ${
+        current[characterIndex] === null
+          ? "not chosen yet"
+          : poll.voteLabels[
+              current[
+                characterIndex
+              ]
+            ]
+      }\nAssigned: ${assigned}/5.`,
+
+    components,
+
+    flags:
+      MessageFlags.Ephemeral,
+  });
+}
+
+/*
+ * CATEGORY SELECTED
+ *
+ * This only updates the private
+ * voter interface. It does not post
+ * anything publicly.
+ */
 
 async function handleChoice(
   interaction
 ) {
   if (
     !poll ||
-    poll.status !== "active"
+    poll.status !==
+      "active"
   ) {
     return interaction.reply({
       content:
@@ -673,34 +1030,86 @@ async function handleChoice(
       interaction.values[0]
     );
 
+  if (
+    characterIndex < 0 ||
+    characterIndex >= 5 ||
+    optionIndex < 0 ||
+    optionIndex >= 5
+  ) {
+    return interaction.reply({
+      content:
+        "Invalid selection.",
+      flags:
+        MessageFlags.Ephemeral,
+    });
+  }
+
   const current =
     selections.get(
       interaction.user.id
     ) ||
     Array(5).fill(null);
 
-  current[characterIndex] =
-    optionIndex;
+  /*
+   * Prevent duplicate categories.
+   */
+  for (
+    let index = 0;
+    index < 5;
+    index++
+  ) {
+    if (
+      index !== characterIndex &&
+      current[index] ===
+        optionIndex
+    ) {
+      return interaction.reply({
+        content:
+          "That category is already assigned to another character.",
+        flags:
+          MessageFlags.Ephemeral,
+      });
+    }
+  }
+
+  current[
+    characterIndex
+  ] = optionIndex;
 
   selections.set(
     interaction.user.id,
     [...current]
   );
 
+  const assigned =
+    current.filter(
+      (value) =>
+        value !== null
+    ).length;
+
   await interaction.update({
-    components:
-      buildMenus(
+    content:
+      `${poll.characters[characterIndex].name}: ${poll.voteLabels[optionIndex]}\nAssigned: ${assigned}/5.`,
+
+    components: [
+      buildPrivateCharacterButtons(
         interaction.user.id
       ),
+    ],
   });
 }
+
+/*
+ * CONFIRM VOTE
+ */
 
 async function confirmVote(
   interaction
 ) {
   if (
     !poll ||
-    poll.status !== "active"
+    poll.status !==
+      "active"
   ) {
     return interaction.reply({
       content:
@@ -719,7 +1128,8 @@ async function confirmVote(
     !choices ||
     choices.length !== 5 ||
     choices.some(
-      (value) => value === null
+      (value) =>
+        value === null
     )
   ) {
     return interaction.reply({
@@ -731,7 +1141,8 @@ async function confirmVote(
   }
 
   if (
-    new Set(choices).size !== 5
+    new Set(choices).size !==
+    5
   ) {
     return interaction.reply({
       content:
@@ -744,8 +1155,11 @@ async function confirmVote(
   votes.set(
     interaction.user.id,
     {
-      choices: [...choices],
-      timestamp: Date.now(),
+      choices: [
+        ...choices,
+      ],
+      timestamp:
+        Date.now(),
     }
   );
 
@@ -755,9 +1169,10 @@ async function confirmVote(
   );
 
   await updatePublicImage();
+
   await saveState();
 
-  await interaction.reply({
+  return interaction.reply({
     content:
       "Vote confirmed.",
     flags:
@@ -765,8 +1180,65 @@ async function confirmVote(
   });
 }
 
+/*
+ * UPDATE THE ONE PUBLIC MESSAGE
+ */
+
+async function updatePublicImage() {
+  if (
+    !poll ||
+    !publicPollMessage
+  ) {
+    return;
+  }
+
+  const image =
+    await buildPollImage();
+
+  const components =
+    poll.status ===
+    "active"
+      ? [
+          buildCharacterButtons(),
+          buildConfirmRow(),
+        ]
+      : [
+          buildCharacterButtons(
+            true
+          ),
+        ];
+
+  await publicPollMessage.edit({
+    content:
+      poll.status ===
+      "active"
+        ? null
+        : "POLL CLOSED",
+
+    attachments: [],
+
+    files: [
+      new AttachmentBuilder(
+        image,
+        {
+          name:
+            "poll-results.jpg",
+        }
+      ),
+    ],
+
+    components,
+  });
+}
+
+/*
+ * CLOSE POLL
+ */
+
 async function closePoll() {
-  if (!poll) return;
+  if (!poll) {
+    return;
+  }
 
   poll.status =
     "closed";
@@ -779,32 +1251,14 @@ async function closePoll() {
     closeTimer = null;
   }
 
-  /*
-   * Keep the final results image visible.
-   * Only disable the voting buttons.
-   */
   try {
-    if (controlMessage) {
-      const disabledRows =
-        controlMessage.components.map(
-          (row) =>
-            new ActionRowBuilder()
-              .addComponents(
-                row.components.map(
-                  (component) =>
-                    ButtonBuilder
-                      .from(component)
-                      .setDisabled(true)
-                )
-              )
-        );
-
-      await controlMessage.edit({
-        components:
-          disabledRows,
-      });
-    }
-  } catch {}
+    await updatePublicImage();
+  } catch (error) {
+    console.error(
+      "Could not update closed poll:",
+      error
+    );
+  }
 
   await saveState();
 
@@ -812,7 +1266,9 @@ async function closePoll() {
 }
 
 function scheduleClose() {
-  if (!poll) return;
+  if (!poll) {
+    return;
+  }
 
   if (closeTimer) {
     clearTimeout(
@@ -825,8 +1281,7 @@ function scheduleClose() {
     Date.now();
 
   if (remaining <= 0) {
-    closePoll();
-    return;
+    return closePoll();
   }
 
   closeTimer =
@@ -835,6 +1290,10 @@ function scheduleClose() {
       remaining
     );
 }
+
+/*
+ * RESTORE ACTIVE POLL AFTER RESTART
+ */
 
 async function loadSavedPoll() {
   const messages =
@@ -854,7 +1313,9 @@ async function loadSavedPoll() {
           a.createdTimestamp
       );
 
-  if (!stateMessages.length) {
+  if (
+    !stateMessages.length
+  ) {
     return;
   }
 
@@ -864,8 +1325,7 @@ async function loadSavedPoll() {
     saved =
       JSON.parse(
         stateMessages[0]
-          .content
-          .substring(
+          .content.substring(
             "POLL_STATE|".length
           )
       );
@@ -874,23 +1334,26 @@ async function loadSavedPoll() {
   }
 
   /*
-   * Only version 4 is used.
-   * Older test polls are ignored.
+   * Only the new version 5
+   * poll format is restored.
    */
   if (
-    saved.schemaVersion !== 4
+    saved.schemaVersion !==
+    5
   ) {
     return;
   }
 
   if (
-    saved.status !== "active"
+    saved.status !==
+    "active"
   ) {
     return;
   }
 
   if (
-    saved.endTime <= Date.now()
+    saved.endTime <=
+    Date.now()
   ) {
     return;
   }
@@ -919,8 +1382,9 @@ async function loadSavedPoll() {
     await getDataChannel();
 
   /*
-   * Restore the clean character strip.
+   * Restore the clean base image.
    */
+
   try {
     const baseMessage =
       await dataChannel.messages.fetch(
@@ -947,6 +1411,7 @@ async function loadSavedPoll() {
     );
 
     poll = null;
+
     return;
   }
 
@@ -965,16 +1430,16 @@ async function loadSavedPoll() {
     return;
   }
 
-  try {
-    controlMessage =
-      await publicChannel.messages.fetch(
-        saved.controlMessageId
-      );
-  } catch {}
+  /*
+   * Restore votes from the
+   * private data channel.
+   */
 
   votes = new Map();
 
-  for (const message of messages) {
+  for (
+    const message of messages
+  ) {
     if (
       !message.content.startsWith(
         "VOTE|"
@@ -1021,16 +1486,22 @@ async function loadSavedPoll() {
   scheduleClose();
 }
 
+/*
+ * CREATE POLL
+ */
+
 async function createPoll(
   interaction
 ) {
   if (
     poll &&
-    poll.status === "active"
+    poll.status ===
+      "active"
   ) {
     return interaction.reply({
       content:
         "There is already an active poll. Use `/endpoll` first.",
+
       flags:
         MessageFlags.Ephemeral,
     });
@@ -1056,7 +1527,16 @@ async function createPoll(
 
   const characters = [];
 
-  for (let i = 1; i <= 5; i++) {
+  /*
+   * Get five pictures and
+   * five character names.
+   */
+
+  for (
+    let i = 1;
+    i <= 5;
+    i++
+  ) {
     const image =
       interaction.options.getAttachment(
         `image${i}`
@@ -1083,16 +1563,26 @@ async function createPoll(
 
     characters.push({
       name,
-      url: image.url,
+      url:
+        image.url,
     });
   }
+
+  /*
+   * Get five symbols and
+   * five voting option names.
+   */
 
   const voteLabels = [];
   const symbols = [];
 
-  for (let i = 1; i <= 5; i++) {
+  for (
+    let i = 1;
+    i <= 5;
+    i++
+  ) {
     const symbol =
-      clean(
+      cleanSymbol(
         interaction.options.getString(
           `symbol${i}`
         )
@@ -1117,14 +1607,25 @@ async function createPoll(
       );
     }
 
-    symbols.push(symbol);
-    voteLabels.push(vote);
+    symbols.push(
+      symbol
+    );
+
+    voteLabels.push(
+      vote
+    );
   }
+
+  /*
+   * Voting option names must
+   * all be different.
+   */
 
   if (
     new Set(
       voteLabels.map(
-        (x) => x.toLowerCase()
+        (value) =>
+          value.toLowerCase()
       )
     ).size !== 5
   ) {
@@ -1134,46 +1635,43 @@ async function createPoll(
   }
 
   /*
-   * Result labels are entered in ONE optional field,
-   * separated with |.
-   *
-   * Example:
-   * Married | Snogged | Smashed | Friend-zoned | Killed
-   *
-   * If left blank, the voting option names are used.
+   * Optional result labels.
+   * If none is supplied, the
+   * voting option name is used.
    */
-  const resultText =
-    clean(
-      interaction.options.getString(
-        "results"
-      )
-    );
 
-  let resultLabels;
+  const resultLabels = [];
 
-  if (resultText) {
-    resultLabels =
-      resultText
-        .split("|")
-        .map(clean)
-        .filter(Boolean);
-
-    if (resultLabels.length !== 5) {
-      return interaction.editReply(
-        "The Results field must contain exactly 5 names separated by |"
+  for (
+    let i = 1;
+    i <= 5;
+    i++
+  ) {
+    const result =
+      clean(
+        interaction.options.getString(
+          `result${i}`
+        )
       );
-    }
-  } else {
-    resultLabels =
-      [...voteLabels];
+
+    resultLabels.push(
+      result ||
+        voteLabels[
+          i - 1
+        ]
+    );
   }
+
+  /*
+   * Download all five images.
+   */
 
   const imageBuffers = [];
 
   try {
     for (
-      const character
-      of characters
+      const character of
+        characters
     ) {
       imageBuffers.push(
         await downloadBuffer(
@@ -1187,8 +1685,13 @@ async function createPoll(
     );
   }
 
+  /*
+   * Create poll state.
+   */
+
   poll = {
-    id: makeId(),
+    id:
+      makeId(),
 
     duration:
       durationDays,
@@ -1199,10 +1702,10 @@ async function createPoll(
     endTime:
       Date.now() +
       durationDays *
-      24 *
-      60 *
-      60 *
-      1000,
+        24 *
+        60 *
+        60 *
+        1000,
 
     publicChannelId:
       interaction.channelId,
@@ -1210,19 +1713,22 @@ async function createPoll(
     publicMessageId:
       null,
 
-    controlMessageId:
-      null,
-
     baseImageMessageId:
       null,
 
     characters:
       characters.map(
-        (character, index) => ({
+        (
+          character,
+          index
+        ) => ({
           name:
             character.name,
+
           image:
-            imageBuffers[index],
+            imageBuffers[
+              index
+            ],
         })
       ),
 
@@ -1233,102 +1739,89 @@ async function createPoll(
     resultLabels,
 
     characterLeaders:
-      [[], [], [], [], []],
+      [
+        [],
+        [],
+        [],
+        [],
+        [],
+      ],
 
     status:
       "active",
   };
 
-  votes = new Map();
-  selections = new Map();
+  votes =
+    new Map();
+
+  selections =
+    new Map();
 
   try {
     /*
-     * Build and privately store the clean image.
+     * Create and store the
+     * clean base image.
      */
+
     baseImageBuffer =
       await buildBaseImage();
 
     await saveBaseImage();
 
     /*
-     * Build the actual public results image.
+     * Build initial results image.
      */
+
     const resultImage =
       await buildPollImage();
 
-    const attachment =
-      new AttachmentBuilder(
-        resultImage,
-        {
-          name:
-            "poll-results.jpg",
-        }
-      );
-
     /*
-     * ONE public image.
+     * ONE public Discord message.
+     *
+     * Image + character buttons +
+     * confirm/change buttons.
      */
+
     publicPollMessage =
       await interaction.channel.send({
-        files: [attachment],
+        files: [
+          new AttachmentBuilder(
+            resultImage,
+            {
+              name:
+                "poll-results.jpg",
+            }
+          ),
+        ],
+
+        components: [
+          buildCharacterButtons(),
+          buildConfirmRow(),
+        ],
       });
 
     poll.publicMessageId =
       publicPollMessage.id;
-
-    /*
-     * ONE clean control row.
-     */
-    const voteButton =
-      new ButtonBuilder()
-        .setCustomId("vote")
-        .setLabel(
-          "VOTE / CHANGE VOTE"
-        )
-        .setStyle(
-          ButtonStyle.Primary
-        );
-
-    const confirmButton =
-      new ButtonBuilder()
-        .setCustomId("confirm")
-        .setLabel(
-          "CONFIRM VOTE"
-        )
-        .setStyle(
-          ButtonStyle.Success
-        );
-
-    const row =
-      new ActionRowBuilder()
-        .addComponents(
-          voteButton,
-          confirmButton
-        );
-
-    controlMessage =
-      await interaction.channel.send({
-        components: [row],
-      });
-
-    poll.controlMessageId =
-      controlMessage.id;
 
     await saveState();
 
     scheduleClose();
 
     /*
-     * Remove the private "Poll created" reply.
+     * Remove the slash command's
+     * temporary response.
      */
+
     await interaction.deleteReply();
 
   } catch (error) {
-    console.error(error);
+    console.error(
+      error
+    );
 
     poll = null;
-    baseImageBuffer = null;
+    baseImageBuffer =
+      null;
 
     await interaction.editReply(
       `Something went wrong: ${error.message}`
@@ -1336,9 +1829,15 @@ async function createPoll(
   }
 }
 
+/*
+ * /poll COMMAND
+ */
+
 const pollCommand =
   new SlashCommandBuilder()
-    .setName("poll")
+    .setName(
+      "poll"
+    )
     .setDescription(
       "Create a five-character poll"
     )
@@ -1348,110 +1847,172 @@ const pollCommand =
     .addStringOption(
       (option) =>
         option
-          .setName("duration")
+          .setName(
+            "duration"
+          )
           .setDescription(
             "How long the poll runs"
           )
-          .setRequired(true)
+          .setRequired(
+            true
+          )
           .addChoices(
             {
-              name: "1 day",
-              value: "1d",
+              name:
+                "1 day",
+              value:
+                "1d",
             },
             {
-              name: "3 days",
-              value: "3d",
+              name:
+                "3 days",
+              value:
+                "3d",
             },
             {
-              name: "7 days",
-              value: "7d",
+              name:
+                "7 days",
+              value:
+                "7d",
             },
             {
-              name: "14 days",
-              value: "14d",
+              name:
+                "14 days",
+              value:
+                "14d",
             }
           )
     );
 
 /*
- * 5 images
+ * Five images.
  */
-for (let i = 1; i <= 5; i++) {
+
+for (
+  let i = 1;
+  i <= 5;
+  i++
+) {
   pollCommand.addAttachmentOption(
     (option) =>
       option
-        .setName(`image${i}`)
+        .setName(
+          `image${i}`
+        )
         .setDescription(
           `Picture ${i}`
         )
-        .setRequired(true)
+        .setRequired(
+          true
+        )
   );
 }
 
 /*
- * 5 character names
+ * Five character names.
  */
-for (let i = 1; i <= 5; i++) {
+
+for (
+  let i = 1;
+  i <= 5;
+  i++
+) {
   pollCommand.addStringOption(
     (option) =>
       option
-        .setName(`name${i}`)
+        .setName(
+          `name${i}`
+        )
         .setDescription(
           `Character ${i} name`
         )
-        .setRequired(true)
+        .setRequired(
+          true
+        )
   );
 }
 
 /*
- * 5 symbols
+ * Five symbols.
  */
-for (let i = 1; i <= 5; i++) {
+
+for (
+  let i = 1;
+  i <= 5;
+  i++
+) {
   pollCommand.addStringOption(
     (option) =>
       option
-        .setName(`symbol${i}`)
+        .setName(
+          `symbol${i}`
+        )
         .setDescription(
           `Symbol for voting option ${i}`
         )
-        .setRequired(true)
+        .setRequired(
+          true
+        )
   );
 }
 
 /*
- * 5 voting option names
+ * Five voting option names.
  */
-for (let i = 1; i <= 5; i++) {
+
+for (
+  let i = 1;
+  i <= 5;
+  i++
+) {
   pollCommand.addStringOption(
     (option) =>
       option
-        .setName(`vote${i}`)
+        .setName(
+          `vote${i}`
+        )
         .setDescription(
           `Voting option ${i}`
         )
-        .setRequired(true)
+        .setRequired(
+          true
+        )
   );
 }
 
 /*
- * ONE optional results field.
- *
- * Example:
- * Married | Snogged | Smashed | Friend-zoned | Killed
+ * Five optional result names.
  */
-pollCommand.addStringOption(
-  (option) =>
-    option
-      .setName("results")
-      .setDescription(
-        "Optional: 5 result names separated by |"
-      )
-      .setRequired(false)
-);
+
+for (
+  let i = 1;
+  i <= 5;
+  i++
+) {
+  pollCommand.addStringOption(
+    (option) =>
+      option
+        .setName(
+          `result${i}`
+        )
+        .setDescription(
+          `Optional result name ${i}`
+        )
+        .setRequired(
+          false
+        )
+  );
+}
+
+/*
+ * /endpoll COMMAND
+ */
 
 const endPollCommand =
   new SlashCommandBuilder()
-    .setName("endpoll")
+    .setName(
+      "endpoll"
+    )
     .setDescription(
       "End the current poll"
     )
@@ -1459,11 +2020,17 @@ const endPollCommand =
       PermissionFlagsBits.ManageGuild
     );
 
+/*
+ * REGISTER COMMANDS
+ */
+
 async function registerCommands() {
   const rest =
     new REST({
       version: "10",
-    }).setToken(TOKEN);
+    }).setToken(
+      TOKEN
+    );
 
   await rest.put(
     Routes.applicationCommands(
@@ -1478,36 +2045,53 @@ async function registerCommands() {
   );
 }
 
-client.once("ready", async () => {
-  console.log(
-    `Logged in as ${client.user.tag}`
-  );
+/*
+ * BOT READY
+ */
 
-  try {
-    await registerCommands();
-
+client.once(
+  "ready",
+  async () => {
     console.log(
-      "Slash commands registered."
+      `Logged in as ${client.user.tag}`
     );
 
-    await loadSavedPoll();
+    try {
+      await registerCommands();
 
-    console.log(
-      "Startup complete."
-    );
+      console.log(
+        "Slash commands registered."
+      );
 
-  } catch (error) {
-    console.error(
-      "Startup error:",
-      error
-    );
+      await loadSavedPoll();
+
+      console.log(
+        "Startup complete."
+      );
+
+    } catch (error) {
+      console.error(
+        "Startup error:",
+        error
+      );
+    }
   }
-});
+);
+
+/*
+ * INTERACTIONS
+ */
 
 client.on(
   "interactionCreate",
-  async (interaction) => {
+  async (
+    interaction
+  ) => {
     try {
+
+      /*
+       * SLASH COMMANDS
+       */
 
       if (
         interaction.isChatInputCommand()
@@ -1532,11 +2116,12 @@ client.on(
           if (
             !poll ||
             poll.status !==
-            "active"
+              "active"
           ) {
             return interaction.reply({
               content:
                 "There is no active poll.",
+
               flags:
                 MessageFlags.Ephemeral,
             });
@@ -1547,15 +2132,24 @@ client.on(
           return interaction.reply({
             content:
               "Poll ended.",
+
             flags:
               MessageFlags.Ephemeral,
           });
         }
       }
 
+      /*
+       * BUTTONS
+       */
+
       if (
         interaction.isButton()
       ) {
+
+        /*
+         * CHANGE / START VOTE
+         */
 
         if (
           interaction.customId ===
@@ -1568,6 +2162,10 @@ client.on(
           return;
         }
 
+        /*
+         * CONFIRM
+         */
+
         if (
           interaction.customId ===
           "confirm"
@@ -1578,27 +2176,73 @@ client.on(
 
           return;
         }
-      }
 
-      if (
-        interaction.isStringSelectMenu()
-      ) {
+        /*
+         * PUBLIC CHARACTER BUTTON
+         */
 
         if (
           interaction.customId.startsWith(
-            "choice:"
+            "character:"
           )
         ) {
-          await handleChoice(
-            interaction
+          await openCharacterVote(
+            interaction,
+            Number(
+              interaction.customId
+                .split(":")[1]
+            ),
+            false
           );
+
+          return;
+        }
+
+        /*
+         * PRIVATE CHARACTER BUTTON
+         */
+
+        if (
+          interaction.customId.startsWith(
+            "private-character:"
+          )
+        ) {
+          await openCharacterVote(
+            interaction,
+            Number(
+              interaction.customId
+                .split(":")[1]
+            ),
+            true
+          );
+
+          return;
         }
       }
 
+      /*
+       * CATEGORY DROPDOWN
+       */
+
+      if (
+        interaction.isStringSelectMenu() &&
+        interaction.customId.startsWith(
+          "choice:"
+        )
+      ) {
+        await handleChoice(
+          interaction
+        );
+      }
+
     } catch (error) {
-      console.error(error);
+
+      console.error(
+        error
+      );
 
       try {
+
         if (
           !interaction.replied &&
           !interaction.deferred
@@ -1606,22 +2250,34 @@ client.on(
           await interaction.reply({
             content:
               "Something went wrong.",
+
             flags:
               MessageFlags.Ephemeral,
           });
         }
+
       } catch {}
     }
   }
 );
 
+/*
+ * RENDER HEALTH SERVER
+ */
+
 http
   .createServer(
-    (req, res) => {
-      res.writeHead(200, {
-        "Content-Type":
-          "text/plain",
-      });
+    (
+      req,
+      res
+    ) => {
+      res.writeHead(
+        200,
+        {
+          "Content-Type":
+            "text/plain",
+        }
+      );
 
       res.end(
         "MayorBot is running."
@@ -1636,4 +2292,10 @@ http
       )
   );
 
-client.login(TOKEN);
+/*
+ * LOGIN
+ */
+
+client.login(
+  TOKEN
+);
