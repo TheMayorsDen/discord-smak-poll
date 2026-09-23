@@ -18,12 +18,13 @@ const sharp = require("sharp");
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const POLL_DATA_CHANNEL_ID = process.env.POLL_DATA_CHANNEL_ID;
-
 const PORT = process.env.PORT || 3000;
 
-const PANEL_WIDTH = 500;
-const PANEL_HEIGHT = 900;
-const RESULT_HEIGHT = 150;
+const IMAGE_WIDTH = 600;
+const IMAGE_HEIGHT = 1000;
+const TOP_HEIGHT = 115;
+const BOTTOM_HEIGHT = 95;
+const GAP = 4;
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
@@ -33,82 +34,29 @@ let poll = null;
 let votes = new Map();
 let selections = new Map();
 let baseImageBuffer = null;
-
-let stateMessageId = null;
-let baseImageMessageId = null;
 let publicPollMessage = null;
 let controlMessage = null;
+let stateMessageId = null;
+let baseImageMessageId = null;
 let closeTimer = null;
 
 function makeId() {
-  return `${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+  return `${Date.now()}-${Math.floor(Math.random() * 1000000000)}`;
 }
 
-function cleanText(value) {
+function clean(value) {
   return String(value || "").trim();
 }
 
-function truncate(value, max = 28) {
-  const text = cleanText(value);
-  return text.length > max ? text.slice(0, max - 1) + "…" : text;
+function truncate(value, max) {
+  const text = clean(value);
+  return text.length > max
+    ? text.slice(0, max - 1) + "…"
+    : text;
 }
 
-async function downloadBuffer(url) {
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    throw new Error(`Failed to download image: ${response.status}`);
-  }
-
-  return Buffer.from(await response.arrayBuffer());
-}
-
-function calculateCounts() {
-  const counts = Array.from(
-    { length: poll.voteLabels.length },
-    () => Array(poll.characters.length).fill(0)
-  );
-
-  for (const vote of votes.values()) {
-    for (let character = 0; character < vote.choices.length; character++) {
-      const option = vote.choices[character];
-
-      if (
-        option >= 0 &&
-        option < poll.voteLabels.length
-      ) {
-        counts[option][character]++;
-      }
-    }
-  }
-
-  return counts;
-}
-
-function calculateWinners(counts) {
-  const winners = [];
-
-  for (let option = 0; option < poll.voteLabels.length; option++) {
-    let bestCharacter = poll.winners?.[option] ?? option;
-    let bestCount = counts[option][bestCharacter] || 0;
-
-    for (let character = 0; character < poll.characters.length; character++) {
-      const count = counts[option][character];
-
-      if (count > bestCount) {
-        bestCount = count;
-        bestCharacter = character;
-      }
-    }
-
-    winners.push(bestCharacter);
-  }
-
-  return winners;
-}
-
-function escapeSvg(text) {
-  return String(text)
+function escapeSvg(value) {
+  return String(value)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -116,136 +64,18 @@ function escapeSvg(text) {
     .replace(/'/g, "&apos;");
 }
 
-function resultFontSize(text, availableWidth) {
-  const length = text.length;
+async function downloadBuffer(url) {
+  const response = await fetch(url);
 
-  if (length <= 12) return Math.min(25, availableWidth / 8);
-  if (length <= 20) return Math.min(21, availableWidth / 10);
-  if (length <= 30) return Math.min(17, availableWidth / 12);
-  return Math.min(14, availableWidth / 15);
-}
-
-function buildResultSvg(counts, winners) {
-  const width = PANEL_WIDTH * 5;
-  const height = RESULT_HEIGHT;
-
-  let svg = `
-    <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-      <rect width="${width}" height="${height}" fill="#111111"/>
-  `;
-
-  for (let character = 0; character < 5; character++) {
-    const characterOptions = [];
-
-    for (let option = 0; option < 5; option++) {
-      if (winners[option] === character) {
-        characterOptions.push(option);
-      }
-    }
-
-    if (characterOptions.length === 0) continue;
-
-    const gap = 8;
-    const totalGap = gap * (characterOptions.length - 1);
-    const badgeWidth =
-      (PANEL_WIDTH - 30 - totalGap) / characterOptions.length;
-
-    characterOptions.forEach((option, index) => {
-      const x =
-        character * PANEL_WIDTH +
-        15 +
-        index * (badgeWidth + gap);
-
-      const label =
-        `${poll.resultLabels[option]} ${counts[option][character]}`;
-
-      const fontSize = resultFontSize(label, badgeWidth);
-
-      svg += `
-        <rect
-          x="${x}"
-          y="35"
-          width="${badgeWidth}"
-          height="80"
-          rx="18"
-          fill="#242424"
-          stroke="#ffffff"
-          stroke-width="2"
-        />
-
-        <text
-          x="${x + badgeWidth / 2}"
-          y="84"
-          text-anchor="middle"
-          dominant-baseline="middle"
-          fill="white"
-          font-family="Arial, sans-serif"
-          font-size="${fontSize}px"
-          font-weight="700"
-        >${escapeSvg(label)}</text>
-      `;
-    });
+  if (!response.ok) {
+    throw new Error(`Image download failed: ${response.status}`);
   }
 
-  svg += `</svg>`;
-
-  return Buffer.from(svg);
-}
-
-async function buildPollImage() {
-  const counts = calculateCounts();
-  const winners = calculateWinners(counts);
-
-  poll.winners = winners;
-
-  const panels = [];
-
-  for (const character of poll.characters) {
-    const image = await sharp(character.image)
-      .resize(PANEL_WIDTH, PANEL_HEIGHT, {
-        fit: "cover",
-        position: "centre",
-      })
-      .jpeg({ quality: 90 })
-      .toBuffer();
-
-    panels.push(image);
-  }
-
-  const resultStrip = buildResultSvg(counts, winners);
-
-  return sharp({
-    create: {
-      width: PANEL_WIDTH * 5,
-      height: RESULT_HEIGHT + PANEL_HEIGHT,
-      channels: 3,
-      background: "#111111",
-    },
-  })
-    .composite([
-      {
-        input: resultStrip,
-        left: 0,
-        top: 0,
-      },
-      ...panels.map((image, index) => ({
-        input: image,
-        left: index * PANEL_WIDTH,
-        top: RESULT_HEIGHT,
-      })),
-    ])
-    .jpeg({ quality: 90 })
-    .toBuffer();
+  return Buffer.from(await response.arrayBuffer());
 }
 
 async function getDataChannel() {
-  const channel = await client.channels.fetch(POLL_DATA_CHANNEL_ID);
-
-  if (!channel) {
-    throw new Error("Could not find the MayorBot data channel.");
-  }
-
-  return channel;
+  return await client.channels.fetch(POLL_DATA_CHANNEL_ID);
 }
 
 async function getAllDataMessages() {
@@ -272,235 +102,475 @@ async function getAllDataMessages() {
   return messages;
 }
 
+function getCounts() {
+  const counts = Array.from(
+    { length: 5 },
+    () => Array(5).fill(0)
+  );
+
+  for (const vote of votes.values()) {
+    if (!vote.choices) continue;
+
+    for (let character = 0; character < 5; character++) {
+      const option = vote.choices[character];
+
+      if (option >= 0 && option < 5) {
+        counts[option][character]++;
+      }
+    }
+  }
+
+  return counts;
+}
+
+function getWinners(counts) {
+  const winners = [];
+
+  for (let option = 0; option < 5; option++) {
+    let winner = poll.winners?.[option] ?? option;
+    let highest = counts[option][winner] || 0;
+
+    for (let character = 0; character < 5; character++) {
+      if (counts[option][character] > highest) {
+        highest = counts[option][character];
+        winner = character;
+      }
+    }
+
+    winners.push(winner);
+  }
+
+  return winners;
+}
+
+function textSize(text, width) {
+  const length = text.length;
+
+  if (length <= 12) return Math.min(25, width / 8);
+  if (length <= 20) return Math.min(20, width / 10);
+  if (length <= 30) return Math.min(16, width / 12);
+  return Math.min(13, width / 15);
+}
+
+function buildOverlaySvg(counts, winners) {
+  const width = IMAGE_WIDTH * 5 + GAP * 4;
+  const height = TOP_HEIGHT + IMAGE_HEIGHT + BOTTOM_HEIGHT;
+
+  let svg = `
+    <svg
+      width="${width}"
+      height="${height}"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+
+    <rect
+      width="${width}"
+      height="${height}"
+      fill="#111111"
+    />
+  `;
+
+  /*
+   * TOP:
+   * One winning category above each character.
+   *
+   * If multiple categories are tied on the same character,
+   * they share that character's space horizontally.
+   */
+
+  for (let character = 0; character < 5; character++) {
+    const winningOptions = [];
+
+    for (let option = 0; option < 5; option++) {
+      if (winners[option] === character) {
+        winningOptions.push(option);
+      }
+    }
+
+    if (!winningOptions.length) continue;
+
+    const sectionX =
+      character * (IMAGE_WIDTH + GAP);
+
+    const availableWidth =
+      IMAGE_WIDTH - 20;
+
+    const badgeGap = 6;
+
+    const badgeWidth =
+      (
+        availableWidth -
+        badgeGap * (winningOptions.length - 1)
+      ) / winningOptions.length;
+
+    winningOptions.forEach((option, index) => {
+      const x =
+        sectionX +
+        10 +
+        index * (badgeWidth + badgeGap);
+
+      const label =
+        poll.resultLabels[option];
+
+      const fontSize =
+        textSize(label, badgeWidth);
+
+      svg += `
+        <rect
+          x="${x}"
+          y="15"
+          width="${badgeWidth}"
+          height="80"
+          rx="18"
+          fill="#242424"
+          stroke="#ffffff"
+          stroke-width="2"
+        />
+
+        <text
+          x="${x + badgeWidth / 2}"
+          y="55"
+          text-anchor="middle"
+          dominant-baseline="middle"
+          fill="white"
+          font-family="Arial, sans-serif"
+          font-size="${fontSize}px"
+          font-weight="700"
+        >
+          ${escapeSvg(truncate(label, 35))}
+        </text>
+      `;
+    });
+  }
+
+  /*
+   * BOTTOM:
+   * Five symbols with their TOTAL number of votes.
+   */
+
+  const bottomY = TOP_HEIGHT + IMAGE_HEIGHT;
+
+  const cellWidth =
+    width / 5;
+
+  for (let option = 0; option < 5; option++) {
+    const total =
+      counts[option].reduce(
+        (sum, value) => sum + value,
+        0
+      );
+
+    const centerX =
+      cellWidth * option +
+      cellWidth / 2;
+
+    const symbol =
+      poll.symbols[option];
+
+    svg += `
+      <text
+        x="${centerX - 18}"
+        y="${bottomY + 58}"
+        text-anchor="middle"
+        dominant-baseline="middle"
+        fill="white"
+        font-family="Arial, sans-serif"
+        font-size="36px"
+      >
+        ${escapeSvg(symbol)}
+      </text>
+
+      <text
+        x="${centerX + 24}"
+        y="${bottomY + 58}"
+        text-anchor="middle"
+        dominant-baseline="middle"
+        fill="white"
+        font-family="Arial, sans-serif"
+        font-size="30px"
+        font-weight="700"
+      >
+        ${total}
+      </text>
+    `;
+  }
+
+  svg += `</svg>`;
+
+  return Buffer.from(svg);
+}
+
+async function buildPollImage() {
+  const counts = getCounts();
+
+  const winners = getWinners(counts);
+
+  poll.winners = winners;
+
+  const width =
+    IMAGE_WIDTH * 5 +
+    GAP * 4;
+
+  const height =
+    TOP_HEIGHT +
+    IMAGE_HEIGHT +
+    BOTTOM_HEIGHT;
+
+  const panels = [];
+
+  for (const character of poll.characters) {
+    const image =
+      await sharp(character.image)
+        .resize(
+          IMAGE_WIDTH,
+          IMAGE_HEIGHT,
+          {
+            fit: "cover",
+            position: "centre",
+          }
+        )
+        .jpeg({
+          quality: 92,
+        })
+        .toBuffer();
+
+    panels.push(image);
+  }
+
+  const overlay =
+    buildOverlaySvg(
+      counts,
+      winners
+    );
+
+  return await sharp({
+    create: {
+      width,
+      height,
+      channels: 3,
+      background: "#111111",
+    },
+  })
+    .composite([
+      ...panels.map((image, index) => ({
+        input: image,
+        left:
+          index *
+          (IMAGE_WIDTH + GAP),
+        top: TOP_HEIGHT,
+      })),
+
+      {
+        input: overlay,
+        left: 0,
+        top: 0,
+      },
+    ])
+    .jpeg({
+      quality: 92,
+    })
+    .toBuffer();
+}
+
+async function saveBaseImage() {
+  const channel =
+    await getDataChannel();
+
+  const attachment =
+    new AttachmentBuilder(
+      baseImageBuffer,
+      {
+        name: "poll-base.jpg",
+      }
+    );
+
+  const message =
+    await channel.send({
+      content:
+        `POLL_BASE|${poll.id}`,
+      files: [attachment],
+    });
+
+  baseImageMessageId =
+    message.id;
+
+  poll.baseImageMessageId =
+    message.id;
+}
+
+async function saveVote(
+  userId,
+  choices
+) {
+  const channel =
+    await getDataChannel();
+
+  await channel.send(
+    `VOTE|${JSON.stringify({
+      pollId: poll.id,
+      userId,
+      choices,
+      timestamp: Date.now(),
+    })}`
+  );
+}
+
 async function saveState() {
   if (!poll) return;
 
-  const channel = await getDataChannel();
+  const channel =
+    await getDataChannel();
 
   if (stateMessageId) {
     try {
-      const oldMessage = await channel.messages.fetch(stateMessageId);
-      await oldMessage.delete();
+      const old =
+        await channel.messages.fetch(
+          stateMessageId
+        );
+
+      await old.delete();
     } catch {}
   }
 
   const state = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     pollId: poll.id,
     duration: poll.duration,
     startTime: poll.startTime,
     endTime: poll.endTime,
-    publicChannelId: poll.publicChannelId,
-    publicMessageId: poll.publicMessageId,
-    controlMessageId: poll.controlMessageId,
-    baseImageMessageId: poll.baseImageMessageId,
-    characters: poll.characters.map((c) => ({
-      name: c.name,
-    })),
-    voteLabels: poll.voteLabels,
-    resultLabels: poll.resultLabels,
-    winners: poll.winners,
-    status: poll.status,
+
+    publicChannelId:
+      poll.publicChannelId,
+
+    publicMessageId:
+      poll.publicMessageId,
+
+    controlMessageId:
+      poll.controlMessageId,
+
+    baseImageMessageId:
+      poll.baseImageMessageId,
+
+    characters:
+      poll.characters.map(
+        (character) => ({
+          name: character.name,
+        })
+      ),
+
+    voteLabels:
+      poll.voteLabels,
+
+    symbols:
+      poll.symbols,
+
+    resultLabels:
+      poll.resultLabels,
+
+    winners:
+      poll.winners,
+
+    status:
+      poll.status,
   };
 
-  const message = await channel.send(
-    `POLL_STATE|${JSON.stringify(state)}`
-  );
-
-  stateMessageId = message.id;
-}
-
-async function saveVote(userId, choices) {
-  const channel = await getDataChannel();
-
-  const vote = {
-    pollId: poll.id,
-    userId,
-    choices,
-    timestamp: Date.now(),
-  };
-
-  await channel.send(`VOTE|${JSON.stringify(vote)}`);
-}
-
-async function saveBaseImage() {
-  const channel = await getDataChannel();
-
-  const attachment = new AttachmentBuilder(
-    baseImageBuffer,
-    { name: "poll-base.jpg" }
-  );
-
-  const message = await channel.send({
-    content: `POLL_BASE|${poll.id}`,
-    files: [attachment],
-  });
-
-  baseImageMessageId = message.id;
-  poll.baseImageMessageId = message.id;
-}
-
-async function loadSavedPoll() {
-  const messages = await getAllDataMessages();
-
-  const stateMessages = messages
-    .filter((m) => m.content.startsWith("POLL_STATE|"))
-    .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
-
-  if (!stateMessages.length) return;
-
-  const latest = stateMessages[0];
-
-  let saved;
-
-  try {
-    saved = JSON.parse(
-      latest.content.substring("POLL_STATE|".length)
-    );
-  } catch {
-    return;
-  }
-
-  /*
-   * Old version of the bot.
-   * Close the old test poll rather than trying to use the old layout.
-   */
-  if (saved.schemaVersion !== 2) {
-    try {
-      const channel = await client.channels.fetch(saved.publicChannelId);
-      const message = await channel.messages.fetch(saved.publicMessageId);
-
-      await message.edit({
-        content: "POLL CLOSED",
-        components: [],
-      });
-    } catch {}
-
-    return;
-  }
-
-  if (saved.status !== "active") return;
-
-  if (saved.endTime <= Date.now()) {
-    return;
-  }
-
-  poll = {
-    ...saved,
-    characters: saved.characters.map((character) => ({
-      name: character.name,
-      image: null,
-    })),
-  };
-
-  stateMessageId = latest.id;
-  baseImageMessageId = saved.baseImageMessageId;
-
-  const dataChannel = await getDataChannel();
-
-  try {
-    const baseMessage = await dataChannel.messages.fetch(
-      saved.baseImageMessageId
+  const message =
+    await channel.send(
+      `POLL_STATE|${JSON.stringify(state)}`
     );
 
-    const attachment = baseMessage.attachments.first();
+  stateMessageId =
+    message.id;
+}
 
-    if (!attachment) {
-      throw new Error("Base image missing.");
+function buildMenus(userId) {
+  const current =
+    selections.get(userId) ||
+    Array(5).fill(null);
+
+  return poll.characters.map(
+    (character, characterIndex) => {
+
+      const used =
+        new Set(
+          current.filter(
+            (value) =>
+              value !== null
+          )
+        );
+
+      const available =
+        poll.voteLabels
+          .map(
+            (label, optionIndex) => ({
+              label,
+              optionIndex,
+            })
+          )
+          .filter(
+            ({ optionIndex }) =>
+              !used.has(optionIndex) ||
+              current[characterIndex] ===
+                optionIndex
+          );
+
+      const menu =
+        new StringSelectMenuBuilder()
+          .setCustomId(
+            `choice:${characterIndex}`
+          )
+          .setPlaceholder(
+            `${truncate(
+              character.name,
+              32
+            )} — choose`
+          )
+          .addOptions(
+            available.map(
+              ({
+                label,
+                optionIndex,
+              }) =>
+                new StringSelectMenuOptionBuilder()
+                  .setLabel(
+                    truncate(label, 100)
+                  )
+                  .setValue(
+                    String(optionIndex)
+                  )
+                  .setDefault(
+                    current[
+                      characterIndex
+                    ] === optionIndex
+                  )
+            )
+          );
+
+      return new ActionRowBuilder()
+        .addComponents(menu);
     }
+  );
+}
 
-    baseImageBuffer = await downloadBuffer(attachment.url);
-  } catch {
-    poll = null;
+async function updatePublicImage() {
+  if (
+    !poll ||
+    !publicPollMessage
+  ) {
     return;
   }
 
-  const publicChannel = await client.channels.fetch(
-    poll.publicChannelId
-  );
+  const image =
+    await buildPollImage();
 
-  publicPollMessage = await publicChannel.messages.fetch(
-    poll.publicMessageId
-  );
-
-  if (poll.controlMessageId) {
-    try {
-      controlMessage = await publicChannel.messages.fetch(
-        poll.controlMessageId
-      );
-    } catch {}
-  }
-
-  votes = new Map();
-
-  for (const message of messages) {
-    if (!message.content.startsWith("VOTE|")) continue;
-
-    try {
-      const vote = JSON.parse(
-        message.content.substring("VOTE|".length)
-      );
-
-      if (vote.pollId !== poll.id) continue;
-
-      const existing = votes.get(vote.userId);
-
-      if (
-        !existing ||
-        vote.timestamp > existing.timestamp
-      ) {
-        votes.set(vote.userId, vote);
+  const attachment =
+    new AttachmentBuilder(
+      image,
+      {
+        name:
+          "poll-results.jpg",
       }
-    } catch {}
-  }
-
-  await updatePublicResults();
-  schedulePollClose();
-}
-
-function schedulePollClose() {
-  if (closeTimer) {
-    clearTimeout(closeTimer);
-  }
-
-  if (!poll) return;
-
-  const remaining = poll.endTime - Date.now();
-
-  if (remaining <= 0) {
-    closePoll();
-    return;
-  }
-
-  closeTimer = setTimeout(
-    schedulePollClose,
-    Math.min(remaining, 24 * 60 * 60 * 1000)
-  );
-
-  if (remaining <= 24 * 60 * 60 * 1000) {
-    clearTimeout(closeTimer);
-
-    closeTimer = setTimeout(
-      closePoll,
-      remaining
     );
-  }
-}
-
-async function updatePublicResults() {
-  if (!poll || !publicPollMessage || !baseImageBuffer) return;
-
-  const counts = calculateCounts();
-  const winners = calculateWinners(counts);
-
-  poll.winners = winners;
-
-  const image = await buildPollImage();
-
-  const attachment = new AttachmentBuilder(
-    image,
-    { name: "poll-results.jpg" }
-  );
 
   await publicPollMessage.edit({
     content: null,
@@ -509,169 +579,178 @@ async function updatePublicResults() {
   });
 }
 
-function buildVoteMenus(userId) {
-  const current = selections.get(userId) || Array(5).fill(null);
-
-  return poll.characters.map((character, characterIndex) => {
-    const usedOptions = new Set(
-      current.filter((value) => value !== null)
-    );
-
-    const availableOptions = poll.voteLabels
-      .map((label, optionIndex) => ({
-        label,
-        optionIndex,
-      }))
-      .filter(({ optionIndex }) =>
-        !usedOptions.has(optionIndex) ||
-        current[characterIndex] === optionIndex
-      );
-
-    const menu = new StringSelectMenuBuilder()
-      .setCustomId(`choice:${characterIndex}`)
-      .setPlaceholder(
-        `${truncate(character.name, 35)} — choose`
-      )
-      .addOptions(
-        availableOptions.map(({ label, optionIndex }) =>
-          new StringSelectMenuOptionBuilder()
-            .setLabel(truncate(label, 100))
-            .setValue(String(optionIndex))
-            .setDefault(
-              current[characterIndex] === optionIndex
-            )
-        )
-      );
-
-    return new ActionRowBuilder().addComponents(menu);
-  });
-}
-
-async function openVotingPanel(interaction) {
-  if (!poll || poll.status !== "active") {
+async function openVote(interaction) {
+  if (
+    !poll ||
+    poll.status !== "active"
+  ) {
     return interaction.reply({
-      content: "This poll is closed.",
-      flags: MessageFlags.Ephemeral,
+      content:
+        "This poll is closed.",
+      flags:
+        MessageFlags.Ephemeral,
     });
   }
 
-  const existingVote = votes.get(interaction.user.id);
-
-  if (existingVote) {
-    selections.set(
-      interaction.user.id,
-      [...existingVote.choices]
+  const previous =
+    votes.get(
+      interaction.user.id
     );
-  } else {
-    selections.set(
-      interaction.user.id,
-      Array(5).fill(null)
-    );
-  }
-
-  return interaction.reply({
-    components: buildVoteMenus(interaction.user.id),
-    flags: MessageFlags.Ephemeral,
-  });
-}
-
-async function handleChoice(interaction) {
-  if (!poll || poll.status !== "active") {
-    return interaction.reply({
-      content: "This poll is closed.",
-      flags: MessageFlags.Ephemeral,
-    });
-  }
-
-  const characterIndex = Number(
-    interaction.customId.split(":")[1]
-  );
-
-  const optionIndex = Number(
-    interaction.values[0]
-  );
-
-  let current =
-    selections.get(interaction.user.id) ||
-    Array(5).fill(null);
-
-  current = [...current];
-
-  current[characterIndex] = optionIndex;
 
   selections.set(
     interaction.user.id,
-    current
+    previous
+      ? [...previous.choices]
+      : Array(5).fill(null)
   );
 
-  await interaction.update({
-    components: buildVoteMenus(interaction.user.id),
+  await interaction.reply({
+    components:
+      buildMenus(
+        interaction.user.id
+      ),
+    flags:
+      MessageFlags.Ephemeral,
   });
 }
 
-async function confirmVote(interaction) {
-  if (!poll || poll.status !== "active") {
-    return interaction.reply({
-      content: "This poll is closed.",
-      flags: MessageFlags.Ephemeral,
-    });
-  }
-
-  const current = selections.get(interaction.user.id);
-
+async function handleChoice(
+  interaction
+) {
   if (
-    !current ||
-    current.length !== 5 ||
-    current.some((value) => value === null)
+    !poll ||
+    poll.status !== "active"
   ) {
     return interaction.reply({
-      content: "Please choose one option for all five characters first.",
-      flags: MessageFlags.Ephemeral,
+      content:
+        "This poll is closed.",
+      flags:
+        MessageFlags.Ephemeral,
     });
   }
 
-  const unique = new Set(current);
+  const characterIndex =
+    Number(
+      interaction.customId
+        .split(":")[1]
+    );
 
-  if (unique.size !== 5) {
-    return interaction.reply({
-      content: "Each option must be used exactly once.",
-      flags: MessageFlags.Ephemeral,
-    });
-  }
+  const optionIndex =
+    Number(
+      interaction.values[0]
+    );
 
-  votes.set(interaction.user.id, {
-    choices: [...current],
-    timestamp: Date.now(),
+  const current =
+    selections.get(
+      interaction.user.id
+    ) ||
+    Array(5).fill(null);
+
+  current[characterIndex] =
+    optionIndex;
+
+  selections.set(
+    interaction.user.id,
+    [...current]
+  );
+
+  await interaction.update({
+    components:
+      buildMenus(
+        interaction.user.id
+      ),
   });
+}
+
+async function confirmVote(
+  interaction
+) {
+  if (
+    !poll ||
+    poll.status !== "active"
+  ) {
+    return interaction.reply({
+      content:
+        "This poll is closed.",
+      flags:
+        MessageFlags.Ephemeral,
+    });
+  }
+
+  const choices =
+    selections.get(
+      interaction.user.id
+    );
+
+  if (
+    !choices ||
+    choices.length !== 5 ||
+    choices.some(
+      (value) => value === null
+    )
+  ) {
+    return interaction.reply({
+      content:
+        "Please choose one option for all five characters first.",
+      flags:
+        MessageFlags.Ephemeral,
+    });
+  }
+
+  if (
+    new Set(choices).size !== 5
+  ) {
+    return interaction.reply({
+      content:
+        "Each option must be used exactly once.",
+      flags:
+        MessageFlags.Ephemeral,
+    });
+  }
+
+  votes.set(
+    interaction.user.id,
+    {
+      choices: [...choices],
+      timestamp: Date.now(),
+    }
+  );
 
   await saveVote(
     interaction.user.id,
-    current
+    choices
   );
 
-  await updatePublicResults();
+  await updatePublicImage();
   await saveState();
 
-  return interaction.reply({
-    content: "Vote confirmed.",
-    flags: MessageFlags.Ephemeral,
+  await interaction.reply({
+    content:
+      "Vote confirmed.",
+    flags:
+      MessageFlags.Ephemeral,
   });
 }
 
 async function closePoll() {
   if (!poll) return;
 
-  poll.status = "closed";
+  poll.status =
+    "closed";
 
   if (closeTimer) {
-    clearTimeout(closeTimer);
+    clearTimeout(
+      closeTimer
+    );
+
     closeTimer = null;
   }
 
   try {
     if (publicPollMessage) {
       await publicPollMessage.edit({
-        content: "POLL CLOSED",
+        content:
+          "POLL CLOSED",
         attachments: [],
         components: [],
       });
@@ -680,14 +759,23 @@ async function closePoll() {
 
   try {
     if (controlMessage) {
+      const disabledRows =
+        controlMessage.components.map(
+          (row) =>
+            new ActionRowBuilder()
+              .addComponents(
+                row.components.map(
+                  (component) =>
+                    ButtonBuilder
+                      .from(component)
+                      .setDisabled(true)
+                )
+              )
+        );
+
       await controlMessage.edit({
-        components: controlMessage.components.map((row) =>
-          new ActionRowBuilder().addComponents(
-            row.components.map((component) =>
-              ButtonBuilder.from(component).setDisabled(true)
-            )
-          )
-        ),
+        components:
+          disabledRows,
       });
     }
   } catch {}
@@ -697,42 +785,271 @@ async function closePoll() {
   selections.clear();
 }
 
-async function createPoll(interaction) {
-  if (poll && poll.status === "active") {
+function scheduleClose() {
+  if (!poll) return;
+
+  if (closeTimer) {
+    clearTimeout(
+      closeTimer
+    );
+  }
+
+  const remaining =
+    poll.endTime -
+    Date.now();
+
+  if (remaining <= 0) {
+    closePoll();
+    return;
+  }
+
+  closeTimer =
+    setTimeout(
+      closePoll,
+      remaining
+    );
+}
+
+async function loadSavedPoll() {
+  const messages =
+    await getAllDataMessages();
+
+  const stateMessages =
+    messages
+      .filter(
+        (message) =>
+          message.content.startsWith(
+            "POLL_STATE|"
+          )
+      )
+      .sort(
+        (a, b) =>
+          b.createdTimestamp -
+          a.createdTimestamp
+      );
+
+  if (!stateMessages.length) {
+    return;
+  }
+
+  let saved;
+
+  try {
+    saved =
+      JSON.parse(
+        stateMessages[0]
+          .content
+          .substring(
+            "POLL_STATE|".length
+          )
+      );
+  } catch {
+    return;
+  }
+
+  /*
+   * Version 2 was the previous layout.
+   * It is deliberately ignored so the old test
+   * poll cannot interfere with the new version.
+   */
+  if (
+    saved.schemaVersion !== 3
+  ) {
+    try {
+      const channel =
+        await client.channels.fetch(
+          saved.publicChannelId
+        );
+
+      const message =
+        await channel.messages.fetch(
+          saved.publicMessageId
+        );
+
+      await message.edit({
+        content:
+          "POLL CLOSED",
+        attachments: [],
+        components: [],
+      });
+    } catch {}
+
+    return;
+  }
+
+  if (
+    saved.status !== "active"
+  ) {
+    return;
+  }
+
+  if (
+    saved.endTime <= Date.now()
+  ) {
+    return;
+  }
+
+  poll = {
+    ...saved,
+    characters:
+      saved.characters.map(
+        (character) => ({
+          name:
+            character.name,
+          image:
+            null,
+        })
+      ),
+  };
+
+  stateMessageId =
+    stateMessages[0].id;
+
+  baseImageMessageId =
+    saved.baseImageMessageId;
+
+  const dataChannel =
+    await getDataChannel();
+
+  try {
+    const baseMessage =
+      await dataChannel.messages.fetch(
+        saved.baseImageMessageId
+      );
+
+    const attachment =
+      baseMessage.attachments.first();
+
+    if (!attachment) {
+      throw new Error(
+        "Base image missing."
+      );
+    }
+
+    baseImageBuffer =
+      await downloadBuffer(
+        attachment.url
+      );
+  } catch {
+    poll = null;
+    return;
+  }
+
+  const publicChannel =
+    await client.channels.fetch(
+      saved.publicChannelId
+    );
+
+  publicPollMessage =
+    await publicChannel.messages.fetch(
+      saved.publicMessageId
+    );
+
+  try {
+    controlMessage =
+      await publicChannel.messages.fetch(
+        saved.controlMessageId
+      );
+  } catch {}
+
+  votes = new Map();
+
+  for (const message of messages) {
+    if (
+      !message.content.startsWith(
+        "VOTE|"
+      )
+    ) {
+      continue;
+    }
+
+    try {
+      const vote =
+        JSON.parse(
+          message.content.substring(
+            "VOTE|".length
+          )
+        );
+
+      if (
+        vote.pollId !==
+        poll.id
+      ) {
+        continue;
+      }
+
+      const existing =
+        votes.get(
+          vote.userId
+        );
+
+      if (
+        !existing ||
+        vote.timestamp >
+          existing.timestamp
+      ) {
+        votes.set(
+          vote.userId,
+          vote
+        );
+      }
+    } catch {}
+  }
+
+  await updatePublicImage();
+
+  scheduleClose();
+}
+
+async function createPoll(
+  interaction
+) {
+  if (
+    poll &&
+    poll.status === "active"
+  ) {
     return interaction.reply({
-      content: "There is already an active poll. Use `/endpoll` first.",
-      flags: MessageFlags.Ephemeral,
+      content:
+        "There is already an active poll. Use `/endpoll` first.",
+      flags:
+        MessageFlags.Ephemeral,
     });
   }
 
   await interaction.deferReply({
-    flags: MessageFlags.Ephemeral,
+    flags:
+      MessageFlags.Ephemeral,
   });
 
-  const durationChoice =
-    interaction.options.getString("duration");
+  const duration =
+    interaction.options.getString(
+      "duration"
+    );
 
-  const durationMap = {
-    "1d": 1,
-    "3d": 3,
-    "7d": 7,
-    "14d": 14,
-  };
-
-  const durationDays = durationMap[durationChoice];
+  const durationDays =
+    {
+      "1d": 1,
+      "3d": 3,
+      "7d": 7,
+      "14d": 14,
+    }[duration];
 
   const characters = [];
 
   for (let i = 1; i <= 5; i++) {
-    const attachment =
-      interaction.options.getAttachment(`image${i}`);
-
-    const name =
-      cleanText(
-        interaction.options.getString(`name${i}`)
+    const image =
+      interaction.options.getAttachment(
+        `image${i}`
       );
 
-    if (!attachment) {
+    const name =
+      clean(
+        interaction.options.getString(
+          `name${i}`
+        )
+      );
+
+    if (!image) {
       return interaction.editReply(
         `Image ${i} is missing.`
       );
@@ -746,60 +1063,78 @@ async function createPoll(interaction) {
 
     characters.push({
       name,
-      attachmentUrl: attachment.url,
+      url: image.url,
     });
   }
 
   const voteLabels = [];
+  const symbols = [];
+  const resultLabels = [];
 
   for (let i = 1; i <= 5; i++) {
-    const label = cleanText(
-      interaction.options.getString(`vote${i}`)
-    );
+    const symbol =
+      clean(
+        interaction.options.getString(
+          `symbol${i}`
+        )
+      );
 
-    if (!label) {
+    const vote =
+      clean(
+        interaction.options.getString(
+          `vote${i}`
+        )
+      );
+
+    const result =
+      clean(
+        interaction.options.getString(
+          `result${i}`
+        )
+      );
+
+    if (!symbol) {
+      return interaction.editReply(
+        `Symbol ${i} is missing.`
+      );
+    }
+
+    if (!vote) {
       return interaction.editReply(
         `Voting option ${i} is missing.`
       );
     }
 
-    voteLabels.push(label);
-  }
-
-  if (new Set(voteLabels.map((x) => x.toLowerCase())).size !== 5) {
-    return interaction.editReply(
-      "All five voting options must have different names."
-    );
-  }
-
-  const resultLabels = [];
-
-  for (let i = 1; i <= 5; i++) {
-    const entered = cleanText(
-      interaction.options.getString(`result${i}`)
-    );
-
+    symbols.push(symbol);
+    voteLabels.push(vote);
     resultLabels.push(
-      entered || voteLabels[i - 1]
+      result || vote
     );
   }
 
   if (
     new Set(
-      resultLabels.map((x) => x.toLowerCase())
+      voteLabels.map(
+        (x) => x.toLowerCase()
+      )
     ).size !== 5
   ) {
     return interaction.editReply(
-      "All five ranking/result names must have different names."
+      "The five voting options must all be different."
     );
   }
 
   const imageBuffers = [];
 
   try {
-    for (const character of characters) {
+    for (
+      const character
+      of characters
+    ) {
       imageBuffers.push(
-        await downloadBuffer(character.attachmentUrl)
+        await downloadBuffer(
+          character.url
+        )
       );
     }
   } catch (error) {
@@ -810,69 +1145,121 @@ async function createPoll(interaction) {
 
   poll = {
     id: makeId(),
-    duration: durationDays,
-    startTime: Date.now(),
+
+    duration:
+      durationDays,
+
+    startTime:
+      Date.now(),
+
     endTime:
       Date.now() +
-      durationDays * 24 * 60 * 60 * 1000,
-    publicChannelId: interaction.channelId,
-    publicMessageId: null,
-    controlMessageId: null,
-    baseImageMessageId: null,
-    characters: characters.map((character, index) => ({
-      name: character.name,
-      image: imageBuffers[index],
-    })),
+      durationDays *
+        24 *
+        60 *
+        60 *
+        1000,
+
+    publicChannelId:
+      interaction.channelId,
+
+    publicMessageId:
+      null,
+
+    controlMessageId:
+      null,
+
+    baseImageMessageId:
+      null,
+
+    characters:
+      characters.map(
+        (character, index) => ({
+          name:
+            character.name,
+          image:
+            imageBuffers[index],
+        })
+      ),
+
     voteLabels,
+
+    symbols,
+
     resultLabels,
-    winners: [0, 1, 2, 3, 4],
-    status: "active",
+
+    winners:
+      [0, 1, 2, 3, 4],
+
+    status:
+      "active",
   };
 
   votes = new Map();
   selections = new Map();
 
   try {
-    baseImageBuffer = await buildPollImage();
+    baseImageBuffer =
+      await buildPollImage();
 
     await saveBaseImage();
 
-    const resultImage = await buildPollImage();
+    const resultImage =
+      await buildPollImage();
 
-    const resultAttachment = new AttachmentBuilder(
-      resultImage,
-      { name: "poll-results.jpg" }
-    );
+    const attachment =
+      new AttachmentBuilder(
+        resultImage,
+        {
+          name:
+            "poll-results.jpg",
+        }
+      );
 
+    /*
+     * ONE public image.
+     */
     publicPollMessage =
       await interaction.channel.send({
-        files: [resultAttachment],
+        files: [attachment],
       });
 
     poll.publicMessageId =
       publicPollMessage.id;
 
+    /*
+     * ONE clean control row.
+     */
     const voteButton =
       new ButtonBuilder()
         .setCustomId("vote")
-        .setLabel("VOTE / CHANGE VOTE")
-        .setStyle(ButtonStyle.Primary);
+        .setLabel(
+          "VOTE / CHANGE VOTE"
+        )
+        .setStyle(
+          ButtonStyle.Primary
+        );
 
     const confirmButton =
       new ButtonBuilder()
         .setCustomId("confirm")
-        .setLabel("CONFIRM VOTE")
-        .setStyle(ButtonStyle.Success);
+        .setLabel(
+          "CONFIRM VOTE"
+        )
+        .setStyle(
+          ButtonStyle.Success
+        );
 
-    const controlRow =
-      new ActionRowBuilder().addComponents(
-        voteButton,
-        confirmButton
-      );
+    const row =
+      new ActionRowBuilder()
+        .addComponents(
+          voteButton,
+          confirmButton
+        );
 
     controlMessage =
       await interaction.channel.send({
-        components: [controlRow],
+        components: [row],
       });
 
     poll.controlMessageId =
@@ -880,11 +1267,12 @@ async function createPoll(interaction) {
 
     await saveState();
 
-    schedulePollClose();
+    scheduleClose();
 
-    await interaction.editReply(
-      "Poll created."
-    );
+    /*
+     * No "Poll created" message is left behind.
+     */
+    await interaction.deleteReply();
   } catch (error) {
     console.error(error);
 
@@ -892,81 +1280,128 @@ async function createPoll(interaction) {
     baseImageBuffer = null;
 
     await interaction.editReply(
-      `Something went wrong creating the poll: ${error.message}`
+      `Something went wrong: ${error.message}`
     );
   }
 }
 
-const pollCommand = new SlashCommandBuilder()
-  .setName("poll")
-  .setDescription("Create a five-character poll")
-  .setDefaultMemberPermissions(
-    PermissionFlagsBits.ManageGuild
-  )
-  .addStringOption((option) =>
-    option
-      .setName("duration")
-      .setDescription("How long the poll should run")
-      .setRequired(true)
-      .addChoices(
-        { name: "1 day", value: "1d" },
-        { name: "3 days", value: "3d" },
-        { name: "7 days", value: "7d" },
-        { name: "14 days", value: "14d" }
-      )
-  );
+const pollCommand =
+  new SlashCommandBuilder()
+    .setName("poll")
+    .setDescription(
+      "Create a five-character poll"
+    )
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageGuild
+    )
+    .addStringOption(
+      (option) =>
+        option
+          .setName("duration")
+          .setDescription(
+            "How long the poll runs"
+          )
+          .setRequired(true)
+          .addChoices(
+            {
+              name: "1 day",
+              value: "1d",
+            },
+            {
+              name: "3 days",
+              value: "3d",
+            },
+            {
+              name: "7 days",
+              value: "7d",
+            },
+            {
+              name: "14 days",
+              value: "14d",
+            }
+          )
+    );
 
 for (let i = 1; i <= 5; i++) {
-  pollCommand.addAttachmentOption((option) =>
-    option
-      .setName(`image${i}`)
-      .setDescription(`Picture for character ${i}`)
-      .setRequired(true)
+  pollCommand.addAttachmentOption(
+    (option) =>
+      option
+        .setName(`image${i}`)
+        .setDescription(
+          `Picture ${i}`
+        )
+        .setRequired(true)
   );
 }
 
 for (let i = 1; i <= 5; i++) {
-  pollCommand.addStringOption((option) =>
-    option
-      .setName(`name${i}`)
-      .setDescription(`Name of character ${i}`)
-      .setRequired(true)
+  pollCommand.addStringOption(
+    (option) =>
+      option
+        .setName(`name${i}`)
+        .setDescription(
+          `Character ${i} name`
+        )
+        .setRequired(true)
   );
 }
 
 for (let i = 1; i <= 5; i++) {
-  pollCommand.addStringOption((option) =>
-    option
-      .setName(`vote${i}`)
-      .setDescription(`Voting option ${i}`)
-      .setRequired(true)
+  pollCommand.addStringOption(
+    (option) =>
+      option
+        .setName(`symbol${i}`)
+        .setDescription(
+          `Symbol for voting option ${i}`
+        )
+        .setRequired(true)
   );
 }
 
 for (let i = 1; i <= 5; i++) {
-  pollCommand.addStringOption((option) =>
-    option
-      .setName(`result${i}`)
-      .setDescription(
-        `Ranking name ${i} (leave blank to use voting option ${i})`
-      )
-      .setRequired(false)
+  pollCommand.addStringOption(
+    (option) =>
+      option
+        .setName(`vote${i}`)
+        .setDescription(
+          `Voting option ${i}`
+        )
+        .setRequired(true)
   );
 }
 
-const endPollCommand = new SlashCommandBuilder()
-  .setName("endpoll")
-  .setDescription("End the current poll")
-  .setDefaultMemberPermissions(
-    PermissionFlagsBits.ManageGuild
+for (let i = 1; i <= 5; i++) {
+  pollCommand.addStringOption(
+    (option) =>
+      option
+        .setName(`result${i}`)
+        .setDescription(
+          `Name above character ${i}`
+        )
+        .setRequired(false)
   );
+}
+
+const endPollCommand =
+  new SlashCommandBuilder()
+    .setName("endpoll")
+    .setDescription(
+      "End the current poll"
+    )
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageGuild
+    );
 
 async function registerCommands() {
-  const rest = new REST({ version: "10" })
-    .setToken(TOKEN);
+  const rest =
+    new REST({
+      version: "10",
+    }).setToken(TOKEN);
 
   await rest.put(
-    Routes.applicationCommands(client.user.id),
+    Routes.applicationCommands(
+      client.user.id
+    ),
     {
       body: [
         pollCommand.toJSON(),
@@ -977,89 +1412,151 @@ async function registerCommands() {
 }
 
 client.once("ready", async () => {
-  console.log(`Logged in as ${client.user.tag}`);
+  console.log(
+    `Logged in as ${client.user.tag}`
+  );
 
   try {
     await registerCommands();
-    console.log("Slash commands registered.");
+
+    console.log(
+      "Slash commands registered."
+    );
 
     await loadSavedPoll();
 
-    console.log("Startup complete.");
+    console.log(
+      "Startup complete."
+    );
   } catch (error) {
-    console.error("Startup error:", error);
+    console.error(
+      "Startup error:",
+      error
+    );
   }
 });
 
-client.on("interactionCreate", async (interaction) => {
-  try {
-    if (interaction.isChatInputCommand()) {
-      if (interaction.commandName === "poll") {
-        await createPoll(interaction);
-        return;
-      }
-
-      if (interaction.commandName === "endpoll") {
-        if (!poll || poll.status !== "active") {
-          await interaction.reply({
-            content: "There is no active poll.",
-            flags: MessageFlags.Ephemeral,
-          });
-
+client.on(
+  "interactionCreate",
+  async (interaction) => {
+    try {
+      if (
+        interaction.isChatInputCommand()
+      ) {
+        if (
+          interaction.commandName ===
+          "poll"
+        ) {
+          await createPoll(
+            interaction
+          );
           return;
         }
 
-        await closePoll();
+        if (
+          interaction.commandName ===
+          "endpoll"
+        ) {
+          if (
+            !poll ||
+            poll.status !==
+              "active"
+          ) {
+            return interaction.reply({
+              content:
+                "There is no active poll.",
+              flags:
+                MessageFlags.Ephemeral,
+            });
+          }
 
-        await interaction.reply({
-          content: "Poll ended.",
-          flags: MessageFlags.Ephemeral,
-        });
+          await closePoll();
 
-        return;
+          return interaction.reply({
+            content:
+              "Poll ended.",
+            flags:
+              MessageFlags.Ephemeral,
+          });
+        }
       }
-    }
 
-    if (interaction.isButton()) {
-      if (interaction.customId === "vote") {
-        await openVotingPanel(interaction);
-        return;
+      if (
+        interaction.isButton()
+      ) {
+        if (
+          interaction.customId ===
+          "vote"
+        ) {
+          await openVote(
+            interaction
+          );
+          return;
+        }
+
+        if (
+          interaction.customId ===
+          "confirm"
+        ) {
+          await confirmVote(
+            interaction
+          );
+          return;
+        }
       }
 
-      if (interaction.customId === "confirm") {
-        await confirmVote(interaction);
-        return;
+      if (
+        interaction.isStringSelectMenu()
+      ) {
+        if (
+          interaction.customId.startsWith(
+            "choice:"
+          )
+        ) {
+          await handleChoice(
+            interaction
+          );
+        }
       }
-    }
+    } catch (error) {
+      console.error(error);
 
-    if (interaction.isStringSelectMenu()) {
-      if (interaction.customId.startsWith("choice:")) {
-        await handleChoice(interaction);
-        return;
-      }
-    }
-  } catch (error) {
-    console.error(error);
-
-    if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({
-        content: "Something went wrong.",
-        flags: MessageFlags.Ephemeral,
-      });
+      try {
+        if (
+          !interaction.replied &&
+          !interaction.deferred
+        ) {
+          await interaction.reply({
+            content:
+              "Something went wrong.",
+            flags:
+              MessageFlags.Ephemeral,
+          });
+        }
+      } catch {}
     }
   }
-});
+);
 
 http
-  .createServer((req, res) => {
-    res.writeHead(200, {
-      "Content-Type": "text/plain",
-    });
+  .createServer(
+    (req, res) => {
+      res.writeHead(200, {
+        "Content-Type":
+          "text/plain",
+      });
 
-    res.end("MayorBot is running.");
-  })
-  .listen(PORT, () => {
-    console.log(`Web server listening on ${PORT}`);
-  });
+      res.end(
+        "MayorBot is running."
+      );
+    }
+  )
+  .listen(
+    PORT,
+    () =>
+      console.log(
+        `Web server listening on ${PORT}`
+      )
+  );
 
 client.login(TOKEN);
