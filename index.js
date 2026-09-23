@@ -1,5 +1,4 @@
 const http = require("http");
-const path = require("path");
 const {
   Client,
   GatewayIntentBits,
@@ -10,8 +9,8 @@ const {
   StringSelectMenuBuilder,
   PermissionsBitField,
   MessageFlags,
-  Routes,
-  REST
+  REST,
+  Routes
 } = require("discord.js");
 const sharp = require("sharp");
 
@@ -23,97 +22,49 @@ const TOKEN = process.env.DISCORD_TOKEN;
 const DATA_CHANNEL_ID = process.env.POLL_DATA_CHANNEL_ID;
 const PORT = process.env.PORT || 10000;
 
-const CATEGORIES = [
-  {
-    key: "friend",
-    label: "FRIEND-ZONE",
-    emoji: "💙",
-    color: "#4aa3ff"
-  },
-  {
-    key: "snog",
-    label: "SNOG",
-    emoji: "😘",
-    color: "#ff6fae"
-  },
-  {
-    key: "smash",
-    label: "SMASH",
-    emoji: "🔥",
-    color: "#ff6b35"
-  },
-  {
-    key: "marry",
-    label: "MARRY",
-    emoji: "💍",
-    color: "#d9a7ff"
-  },
-  {
-    key: "kill",
-    label: "KILL",
-    emoji: "💀",
-    color: "#777777"
-  }
-];
-
 const DURATIONS = {
-  "1d": {
-    label: "1 day",
-    ms: 24 * 60 * 60 * 1000
-  },
-  "3d": {
-    label: "3 days",
-    ms: 3 * 24 * 60 * 60 * 1000
-  },
-  "7d": {
-    label: "7 days",
-    ms: 7 * 24 * 60 * 60 * 1000
-  },
-  "14d": {
-    label: "14 days",
-    ms: 14 * 24 * 60 * 60 * 1000
-  }
+  "1d": 24 * 60 * 60 * 1000,
+  "3d": 3 * 24 * 60 * 60 * 1000,
+  "7d": 7 * 24 * 60 * 60 * 1000,
+  "14d": 14 * 24 * 60 * 60 * 1000
 };
 
-const RESULTS_TOP = 190;
-const PANEL_WIDTH = 420;
-const PANEL_HEIGHT = 720;
+const IMAGE_WIDTH = 420;
+const IMAGE_HEIGHT = 720;
+const RESULTS_HEIGHT = 155;
 
 // ============================================================
-// WEB SERVER FOR RENDER
+// WEB SERVER
 // ============================================================
 
-const server = http.createServer((req, res) => {
+http.createServer((req, res) => {
   res.writeHead(200, {
     "Content-Type": "text/plain"
   });
 
   res.end("MayorBot is running.");
-});
-
-server.listen(PORT, () => {
+}).listen(PORT, () => {
   console.log(`Web server listening on port ${PORT}`);
 });
 
 // ============================================================
-// DISCORD CLIENT
+// DISCORD
 // ============================================================
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds
-  ]
+  intents: [GatewayIntentBits.Guilds]
 });
 
 // ============================================================
-// POLL STATE
+// CURRENT POLL
 // ============================================================
 
 let poll = null;
 let votes = new Map();
 let selections = new Map();
-let baseImageBuffer = null;
-let publicPollMessage = null;
+
+let baseImage = null;
+let publicMessage = null;
 let stateMessageId = null;
 let closeTimer = null;
 
@@ -121,71 +72,133 @@ let closeTimer = null;
 // COMMAND
 // ============================================================
 
-const pollCommand = new SlashCommandBuilder()
+const command = new SlashCommandBuilder()
   .setName("poll")
-  .setDescription("Create a Friend-zone / Snog / Smash / Marry / Kill poll")
+  .setDescription("Create a custom five-character poll")
   .setDefaultMemberPermissions(
     PermissionsBitField.Flags.ManageGuild
   )
   .setDMPermission(false)
 
+  // DURATION
   .addStringOption(option =>
     option
       .setName("duration")
       .setDescription("How long the poll stays open")
       .setRequired(true)
       .addChoices(
-        {
-          name: "1 day",
-          value: "1d"
-        },
-        {
-          name: "3 days",
-          value: "3d"
-        },
-        {
-          name: "7 days",
-          value: "7d"
-        },
-        {
-          name: "14 days",
-          value: "14d"
-        }
+        { name: "1 day", value: "1d" },
+        { name: "3 days", value: "3d" },
+        { name: "7 days", value: "7d" },
+        { name: "14 days", value: "14d" }
       )
   )
 
+  // CHARACTER IMAGES
   .addAttachmentOption(option =>
-    option
-      .setName("character1")
-      .setDescription("First character image")
+    option.setName("character1_image")
+      .setDescription("Character 1 image")
+      .setRequired(true)
+  )
+  .addAttachmentOption(option =>
+    option.setName("character2_image")
+      .setDescription("Character 2 image")
+      .setRequired(true)
+  )
+  .addAttachmentOption(option =>
+    option.setName("character3_image")
+      .setDescription("Character 3 image")
+      .setRequired(true)
+  )
+  .addAttachmentOption(option =>
+    option.setName("character4_image")
+      .setDescription("Character 4 image")
+      .setRequired(true)
+  )
+  .addAttachmentOption(option =>
+    option.setName("character5_image")
+      .setDescription("Character 5 image")
       .setRequired(true)
   )
 
-  .addAttachmentOption(option =>
-    option
-      .setName("character2")
-      .setDescription("Second character image")
+  // CHARACTER NAMES
+  .addStringOption(option =>
+    option.setName("character1_name")
+      .setDescription("Name of character 1")
+      .setRequired(true)
+  )
+  .addStringOption(option =>
+    option.setName("character2_name")
+      .setDescription("Name of character 2")
+      .setRequired(true)
+  )
+  .addStringOption(option =>
+    option.setName("character3_name")
+      .setDescription("Name of character 3")
+      .setRequired(true)
+  )
+  .addStringOption(option =>
+    option.setName("character4_name")
+      .setDescription("Name of character 4")
+      .setRequired(true)
+  )
+  .addStringOption(option =>
+    option.setName("character5_name")
+      .setDescription("Name of character 5")
       .setRequired(true)
   )
 
-  .addAttachmentOption(option =>
-    option
-      .setName("character3")
-      .setDescription("Third character image")
+  // VOTING OPTIONS
+  .addStringOption(option =>
+    option.setName("option1")
+      .setDescription("Voting option 1")
+      .setRequired(true)
+  )
+  .addStringOption(option =>
+    option.setName("option2")
+      .setDescription("Voting option 2")
+      .setRequired(true)
+  )
+  .addStringOption(option =>
+    option.setName("option3")
+      .setDescription("Voting option 3")
+      .setRequired(true)
+  )
+  .addStringOption(option =>
+    option.setName("option4")
+      .setDescription("Voting option 4")
+      .setRequired(true)
+  )
+  .addStringOption(option =>
+    option.setName("option5")
+      .setDescription("Voting option 5")
       .setRequired(true)
   )
 
-  .addAttachmentOption(option =>
-    option
-      .setName("character4")
-      .setDescription("Fourth character image")
+  // RANKING LABELS
+  .addStringOption(option =>
+    option.setName("ranking1")
+      .setDescription("Result/ranking label 1")
       .setRequired(true)
   )
-
-  .addAttachmentOption(option =>
-    option
-      .setName("character5")
-      .setDescription("Fifth character image")
+  .addStringOption(option =>
+    option.setName("ranking2")
+      .setDescription("Result/ranking label 2")
+      .setRequired(true)
+  )
+  .addStringOption(option =>
+    option.setName("ranking3")
+      .setDescription("Result/ranking label 3")
+      .setRequired(true)
+  )
+  .addStringOption(option =>
+    option.setName("ranking4")
+      .setDescription("Result/ranking label 4")
+      .setRequired(true)
+  )
+  .addStringOption(option =>
+    option.setName("ranking5")
+      .setDescription("Result/ranking label 5")
       .setRequired(true)
   );
 
@@ -193,8 +206,8 @@ const pollCommand = new SlashCommandBuilder()
 // HELPERS
 // ============================================================
 
-function escapeXml(value) {
-  return String(value)
+function esc(text) {
+  return String(text)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -202,24 +215,25 @@ function escapeXml(value) {
     .replace(/'/g, "&apos;");
 }
 
-function cleanCharacterName(filename) {
-  const parsed = path.parse(filename);
-
-  let name = parsed.name
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  if (!name) {
-    name = "CHARACTER";
-  }
-
-  return name
-    .substring(0, 28)
-    .toUpperCase();
+function getOptionValues(interaction, prefix) {
+  return [1, 2, 3, 4, 5].map(i =>
+    interaction.options.getString(
+      `${prefix}${i}`,
+      true
+    )
+  );
 }
 
-function isImageAttachment(attachment) {
+function getAttachments(interaction) {
+  return [1, 2, 3, 4, 5].map(i =>
+    interaction.options.getAttachment(
+      `character${i}_image`,
+      true
+    )
+  );
+}
+
+function validImage(attachment) {
   if (!attachment) return false;
 
   if (
@@ -229,98 +243,89 @@ function isImageAttachment(attachment) {
     return true;
   }
 
-  const extension = path.extname(attachment.name || "").toLowerCase();
-
-  return [
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".webp",
-    ".gif"
-  ].includes(extension);
+  return /\.(png|jpg|jpeg|webp|gif)$/i.test(
+    attachment.name || ""
+  );
 }
 
-async function downloadBuffer(url) {
+async function download(url) {
   const response = await fetch(url);
 
   if (!response.ok) {
     throw new Error(
-      `Could not download image: HTTP ${response.status}`
+      `Image download failed: ${response.status}`
     );
   }
 
-  const arrayBuffer = await response.arrayBuffer();
-
-  return Buffer.from(arrayBuffer);
+  return Buffer.from(
+    await response.arrayBuffer()
+  );
 }
 
 // ============================================================
-// IMAGE CREATION
+// CREATE LARGE FIVE-IMAGE PANEL
 // ============================================================
 
 async function createBaseImage(images) {
-  const resizedImages = [];
+  const panels = [];
 
   for (const image of images) {
-    const resized = await sharp(image)
-      .resize({
-        width: PANEL_WIDTH,
-        height: PANEL_HEIGHT,
-        fit: "cover",
-        position: "centre"
-      })
-      .jpeg({
-        quality: 92
-      })
-      .toBuffer();
-
-    resizedImages.push(resized);
+    panels.push(
+      await sharp(image)
+        .resize({
+          width: IMAGE_WIDTH,
+          height: IMAGE_HEIGHT,
+          fit: "cover",
+          position: "centre"
+        })
+        .jpeg({
+          quality: 94
+        })
+        .toBuffer()
+    );
   }
-
-  const composite = resizedImages.map((buffer, index) => ({
-    input: buffer,
-    left: index * PANEL_WIDTH,
-    top: 0
-  }));
-
-  const width = PANEL_WIDTH * 5;
 
   return sharp({
     create: {
-      width,
-      height: PANEL_HEIGHT,
+      width: IMAGE_WIDTH * 5,
+      height: IMAGE_HEIGHT,
       channels: 3,
-      background: {
-        r: 10,
-        g: 10,
-        b: 14
-      }
+      background: "#101018"
     }
   })
-    .composite(composite)
+    .composite(
+      panels.map((image, index) => ({
+        input: image,
+        left: index * IMAGE_WIDTH,
+        top: 0
+      }))
+    )
     .jpeg({
-      quality: 92
+      quality: 94
     })
     .toBuffer();
 }
 
-function calculateCounts() {
-  const counts = CATEGORIES.map(() =>
-    Array(5).fill(0)
+// ============================================================
+// COUNTS
+// ============================================================
+
+function getCounts() {
+  const counts = Array.from(
+    { length: 5 },
+    () => Array(5).fill(0)
   );
 
   for (const choices of votes.values()) {
-    if (!Array.isArray(choices)) continue;
-
     for (let character = 0; character < 5; character++) {
-      const category = choices[character];
+      const option = choices[character];
 
       if (
-        Number.isInteger(category) &&
-        category >= 0 &&
-        category < 5
+        Number.isInteger(option) &&
+        option >= 0 &&
+        option < 5
       ) {
-        counts[category][character]++;
+        counts[option][character]++;
       }
     }
   }
@@ -328,176 +333,131 @@ function calculateCounts() {
   return counts;
 }
 
-function calculateWinners(counts, previousWinners = null) {
+// ============================================================
+// WINNERS
+// ============================================================
+
+function getWinners(counts) {
   const winners = [];
 
-  for (let category = 0; category < 5; category++) {
-    const row = counts[category];
+  for (let option = 0; option < 5; option++) {
+    const row = counts[option];
 
-    const highest = Math.max(...row);
+    let best = 0;
 
-    const tied = [];
-
-    for (let character = 0; character < 5; character++) {
-      if (row[character] === highest) {
-        tied.push(character);
+    for (let character = 1; character < 5; character++) {
+      if (row[character] > row[best]) {
+        best = character;
       }
     }
 
-    // Keep the previous winner during a tie.
-    if (
-      previousWinners &&
-      tied.includes(previousWinners[category])
-    ) {
-      winners.push(previousWinners[category]);
-      continue;
-    }
-
-    // At the start, spread the five categories across
-    // the five characters rather than putting everything
-    // over character one.
-    if (highest === 0) {
-      winners.push(category);
-      continue;
-    }
-
-    winners.push(tied[0]);
+    winners.push(best);
   }
 
   return winners;
 }
 
-function createResultsSvg(width, winners, counts) {
-  const positions = [
-    [],
-    [],
-    [],
-    [],
-    []
-  ];
+// ============================================================
+// RESULTS IMAGE
+// ============================================================
 
-  for (let category = 0; category < 5; category++) {
-    const character = winners[category];
+function resultsSvg(counts, winners) {
+  const width = IMAGE_WIDTH * 5;
 
-    positions[character].push(category);
+  const placed = Array.from(
+    { length: 5 },
+    () => []
+  );
+
+  for (let option = 0; option < 5; option++) {
+    placed[winners[option]].push(option);
   }
 
   let svg = `
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="${width}"
+    height="${RESULTS_HEIGHT}"
+  >
+    <rect
       width="${width}"
-      height="${RESULTS_TOP}"
-    >
-      <rect
-        x="0"
-        y="0"
-        width="${width}"
-        height="${RESULTS_TOP}"
-        fill="#121019"
-      />
+      height="${RESULTS_HEIGHT}"
+      fill="#111018"
+    />
   `;
 
   for (let character = 0; character < 5; character++) {
-    const categoriesHere = positions[character];
+    const options = placed[character];
 
-    if (categoriesHere.length === 0) {
-      continue;
-    }
+    if (!options.length) continue;
 
-    const centerX =
-      character * PANEL_WIDTH +
-      PANEL_WIDTH / 2;
+    const center =
+      character * IMAGE_WIDTH +
+      IMAGE_WIDTH / 2;
 
-    const badgeWidth = Math.min(
-      PANEL_WIDTH - 20,
-      390
-    );
+    options.forEach((option, index) => {
+      const y = 12 + index * 60;
 
-    const badgeX =
-      centerX - badgeWidth / 2;
-
-    categoriesHere.forEach((category, stackIndex) => {
-      const y = 10 + stackIndex * 55;
-
-      const categoryData = CATEGORIES[category];
+      const label =
+        poll.rankingLabels[option];
 
       const count =
-        counts[category][character];
+        counts[option][character];
+
+      const text =
+        `${label}  ${count}`;
 
       svg += `
-        <g>
-          <rect
-            x="${badgeX}"
-            y="${y}"
-            width="${badgeWidth}"
-            height="45"
-            rx="12"
-            fill="${categoryData.color}"
-            fill-opacity="0.96"
-          />
+        <rect
+          x="${character * IMAGE_WIDTH + 12}"
+          y="${y}"
+          width="${IMAGE_WIDTH - 24}"
+          height="48"
+          rx="12"
+          fill="#20202b"
+          stroke="#ffffff"
+          stroke-opacity="0.25"
+        />
 
-          <text
-            x="${centerX}"
-            y="${y + 30}"
-            text-anchor="middle"
-            font-family="Arial, Helvetica, sans-serif"
-            font-size="21"
-            font-weight="700"
-            fill="#ffffff"
-          >
-            ${escapeXml(
-              `${categoryData.emoji} ${categoryData.label}  ${count}`
-            )}
-          </text>
-        </g>
+        <text
+          x="${center}"
+          y="${y + 31}"
+          text-anchor="middle"
+          font-family="Arial, Helvetica, sans-serif"
+          font-size="21"
+          font-weight="700"
+          fill="white"
+        >
+          ${esc(text)}
+        </text>
       `;
     });
   }
 
-  svg += `
-    </svg>
-  `;
+  svg += "</svg>";
 
   return Buffer.from(svg);
 }
 
 async function createResultsImage() {
-  if (!baseImageBuffer) {
-    throw new Error("Base image is not loaded.");
-  }
-
-  const metadata = await sharp(
-    baseImageBuffer
-  ).metadata();
-
-  const width = metadata.width;
-
-  const counts = calculateCounts();
-
-  const winners = calculateWinners(
-    counts,
-    poll.winners
-  );
+  const counts = getCounts();
+  const winners = getWinners(counts);
 
   poll.winners = winners;
 
-  const svg = createResultsSvg(
-    width,
-    winners,
-    counts
-  );
+  const svg =
+    resultsSvg(
+      counts,
+      winners
+    );
 
-  return sharp(baseImageBuffer)
+  return sharp(baseImage)
     .extend({
-      top: RESULTS_TOP,
+      top: RESULTS_HEIGHT,
       bottom: 0,
       left: 0,
       right: 0,
-      background: {
-        r: 18,
-        g: 16,
-        b: 25
-      }
+      background: "#111018"
     })
     .composite([
       {
@@ -507,152 +467,161 @@ async function createResultsImage() {
       }
     ])
     .jpeg({
-      quality: 92
+      quality: 94
     })
     .toBuffer();
 }
 
 // ============================================================
-// PUBLIC POLL BUTTON
+// PUBLIC POLL
 // ============================================================
 
-function buildPublicComponents(disabled = false) {
-  const button = new ButtonBuilder()
-    .setCustomId("poll_vote")
-    .setLabel("VOTE / CHANGE VOTE")
-    .setStyle(ButtonStyle.Primary)
-    .setDisabled(disabled);
-
+function publicComponents(disabled = false) {
   return [
     new ActionRowBuilder()
-      .addComponents(button)
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId("open_vote")
+          .setLabel(
+            votes.size
+              ? "VOTE / CHANGE VOTE"
+              : "VOTE"
+          )
+          .setStyle(ButtonStyle.Primary)
+          .setDisabled(disabled)
+      )
   ];
 }
 
 // ============================================================
-// PRIVATE VOTING DROPDOWNS
+// PRIVATE VOTING PANEL
 // ============================================================
 
-function buildVotingComponents(userId) {
-  let choices = selections.get(userId);
+function buildVotingRows(userId) {
+  let choices =
+    selections.get(userId);
 
   if (!choices) {
-    choices = [null, null, null, null, null];
+    choices = [
+      null,
+      null,
+      null,
+      null,
+      null
+    ];
 
-    const previousVote = votes.get(userId);
+    const previous =
+      votes.get(userId);
 
-    if (previousVote) {
-      choices = [...previousVote];
+    if (previous) {
+      choices = [...previous];
     }
 
-    selections.set(userId, choices);
+    selections.set(
+      userId,
+      choices
+    );
   }
 
-  const rows = [];
+  return choices.map(
+    (current, character) => {
+      const menu =
+        new StringSelectMenuBuilder()
+          .setCustomId(
+            `choose:${poll.id}:${character}`
+          )
+          .setPlaceholder(
+            current === null
+              ? `${poll.characters[character]} — choose`
+              : `${poll.characters[character]} — ${poll.votingOptions[current]}`
+          )
+          .setMinValues(1)
+          .setMaxValues(1);
 
-  for (let character = 0; character < 5; character++) {
-    const currentChoice = choices[character];
+      const available = [];
 
-    const availableCategories = [];
+      for (let option = 0; option < 5; option++) {
+        const alreadyUsed =
+          choices.some(
+            (value, index) =>
+              index !== character &&
+              value === option
+          );
 
-    for (let category = 0; category < 5; category++) {
-      const alreadyUsedElsewhere =
-        choices.some(
-          (value, otherCharacter) =>
-            otherCharacter !== character &&
-            value === category
-        );
-
-      if (
-        !alreadyUsedElsewhere ||
-        currentChoice === category
-      ) {
-        availableCategories.push(category);
+        if (
+          !alreadyUsed ||
+          option === current
+        ) {
+          available.push(option);
+        }
       }
+
+      menu.addOptions(
+        available.map(option => ({
+          label:
+            poll.votingOptions[option]
+              .substring(0, 100),
+
+          value: String(option),
+
+          default:
+            option === current
+        }))
+      );
+
+      return new ActionRowBuilder()
+        .addComponents(menu);
     }
-
-    const menu = new StringSelectMenuBuilder()
-      .setCustomId(
-        `poll_pick:${poll.id}:${character}`
-      )
-      .setPlaceholder(
-        currentChoice === null
-          ? `${poll.characters[character]} — choose`
-          : `${poll.characters[character]} — ${CATEGORIES[currentChoice].label}`
-      )
-      .setMinValues(1)
-      .setMaxValues(1);
-
-    menu.addOptions(
-      availableCategories.map(category => ({
-        label: CATEGORIES[category].label,
-        value: String(category),
-        description: `${CATEGORIES[category].emoji} ${CATEGORIES[category].label}`,
-        emoji: CATEGORIES[category].emoji,
-        default: currentChoice === category
-      }))
-    );
-
-    rows.push(
-      new ActionRowBuilder()
-        .addComponents(menu)
-    );
-  }
-
-  return rows;
+  );
 }
 
-function isCompleteVote(choices) {
-  if (!Array.isArray(choices)) {
+function complete(choices) {
+  if (!choices) return false;
+
+  if (
+    choices.length !== 5 ||
+    choices.some(x => x === null)
+  ) {
     return false;
   }
 
-  if (choices.length !== 5) {
-    return false;
-  }
-
-  if (choices.some(value => value === null)) {
-    return false;
-  }
-
-  const unique = new Set(choices);
-
-  return unique.size === 5;
+  return new Set(choices).size === 5;
 }
 
-function buildConfirmComponents() {
-  const confirm = new ButtonBuilder()
-    .setCustomId(
-      `poll_confirm:${poll.id}`
-    )
-    .setLabel("CONFIRM VOTE")
-    .setStyle(ButtonStyle.Success);
+// ============================================================
+// CONFIRM BUTTON
+// ============================================================
 
+function confirmRow() {
   return [
     new ActionRowBuilder()
-      .addComponents(confirm)
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId(
+            `confirm:${poll.id}`
+          )
+          .setLabel("CONFIRM VOTE")
+          .setStyle(ButtonStyle.Success)
+      )
   ];
 }
 
 // ============================================================
-// DATA CHANNEL STORAGE
+// DATA CHANNEL
 // ============================================================
 
-async function getDataChannel() {
-  if (!DATA_CHANNEL_ID) {
-    throw new Error(
-      "POLL_DATA_CHANNEL_ID is not set."
-    );
-  }
-
+async function dataChannel() {
   const channel =
     await client.channels.fetch(
       DATA_CHANNEL_ID
     );
 
-  if (!channel || !channel.isTextBased()) {
+  if (
+    !channel ||
+    !channel.isTextBased()
+  ) {
     throw new Error(
-      "MayorBot data channel could not be found."
+      "MayorBot cannot access mayorbot-data."
     );
   }
 
@@ -660,260 +629,173 @@ async function getDataChannel() {
 }
 
 async function saveBaseImage() {
-  const dataChannel = await getDataChannel();
+  const channel =
+    await dataChannel();
 
-  const message = await dataChannel.send({
+  const message =
+    await channel.send({
+      content:
+        `IMAGE:${poll.id}`,
+      files: [
+        {
+          attachment: baseImage,
+          name: `poll-${poll.id}.jpg`
+        }
+      ]
+    });
+
+  poll.baseImageUrl =
+    message.attachments.first().url;
+
+  poll.baseMessageId =
+    message.id;
+}
+
+async function saveVote(userId, choices) {
+  const channel =
+    await dataChannel();
+
+  await channel.send({
     content:
-      `POLL_BASE|${poll.id}|${poll.characters.join(" | ")}`,
-    files: [
-      {
-        attachment: baseImageBuffer,
-        name: `poll-base-${poll.id}.jpg`
-      }
-    ]
+      `VOTE:${JSON.stringify({
+        pollId: poll.id,
+        userId,
+        choices,
+        time: Date.now()
+      })}`
   });
-
-  const attachment =
-    message.attachments.first();
-
-  if (!attachment) {
-    throw new Error(
-      "Could not save the poll base image."
-    );
-  }
-
-  poll.baseImageUrl = attachment.url;
-  poll.baseMessageId = message.id;
-
-  return message;
 }
 
 async function saveState() {
-  const dataChannel =
-    await getDataChannel();
+  const channel =
+    await dataChannel();
 
   if (stateMessageId) {
     try {
-      const oldState =
-        await dataChannel.messages.fetch(
+      const old =
+        await channel.messages.fetch(
           stateMessageId
         );
 
-      await oldState.delete();
-    } catch (error) {
-      // State message may already be gone.
-    }
+      await old.delete();
+    } catch {}
   }
 
   const state = {
-    type: "state",
     id: poll.id,
     status: poll.status,
     guildId: poll.guildId,
     channelId: poll.channelId,
     messageId: poll.messageId,
     endAt: poll.endAt,
-    duration: poll.duration,
     characters: poll.characters,
+    votingOptions: poll.votingOptions,
+    rankingLabels: poll.rankingLabels,
     baseImageUrl: poll.baseImageUrl,
     baseMessageId: poll.baseMessageId,
-    winners: poll.winners,
-    updatedAt: Date.now()
+    winners: poll.winners
   };
 
   const message =
-    await dataChannel.send({
+    await channel.send({
       content:
-        `POLL_STATE:${JSON.stringify(state)}`
+        `STATE:${JSON.stringify(state)}`
     });
 
-  stateMessageId = message.id;
+  stateMessageId =
+    message.id;
 }
 
-async function saveVote(userId, choices) {
-  const dataChannel =
-    await getDataChannel();
+// ============================================================
+// LOAD SAVED DATA
+// ============================================================
 
-  const record = {
-    type: "vote",
-    pollId: poll.id,
-    userId,
-    choices,
-    timestamp: Date.now()
-  };
-
-  await dataChannel.send({
-    content:
-      `VOTE:${JSON.stringify(record)}`
-  });
-}
-
-async function fetchAllDataMessages(channel) {
-  const messages = [];
-  let before;
-
-  while (true) {
-    const batch =
-      await channel.messages.fetch({
-        limit: 100,
-        ...(before ? { before } : {})
-      });
-
-    if (batch.size === 0) {
-      break;
-    }
-
-    messages.push(
-      ...batch.values()
-    );
-
-    if (batch.size < 100) {
-      break;
-    }
-
-    before =
-      batch.last().id;
-  }
-
-  return messages;
-}
-
-async function loadSavedPoll() {
+async function loadPoll() {
   try {
-    const dataChannel =
-      await getDataChannel();
+    const channel =
+      await dataChannel();
 
     const messages =
-      await fetchAllDataMessages(
-        dataChannel
-      );
+      await channel.messages.fetch({
+        limit: 100
+      });
 
-    const stateMessages = messages
-      .filter(message =>
-        message.content.startsWith(
-          "POLL_STATE:"
+    const stateMessages =
+      [...messages.values()]
+        .filter(m =>
+          m.content.startsWith("STATE:")
         )
-      )
-      .sort(
-        (a, b) =>
-          b.createdTimestamp -
-          a.createdTimestamp
-      );
+        .sort(
+          (a, b) =>
+            b.createdTimestamp -
+            a.createdTimestamp
+        );
 
-    if (stateMessages.length === 0) {
-      console.log(
-        "No saved poll found."
-      );
+    if (!stateMessages.length) {
+      console.log("No saved poll.");
       return;
     }
 
-    let savedState = null;
-
-    for (const message of stateMessages) {
-      try {
-        const parsed =
-          JSON.parse(
-            message.content.substring(
-              "POLL_STATE:".length
-            )
-          );
-
-        if (
-          parsed &&
-          parsed.status === "active"
-        ) {
-          savedState = parsed;
-          stateMessageId = message.id;
-          break;
-        }
-      } catch (error) {
-        // Ignore malformed state records.
-      }
-    }
-
-    if (!savedState) {
-      console.log(
-        "No active saved poll found."
+    const state =
+      JSON.parse(
+        stateMessages[0]
+          .content
+          .substring(6)
       );
+
+    if (state.status !== "active") {
       return;
     }
 
-    poll = savedState;
+    poll = state;
+    stateMessageId =
+      stateMessages[0].id;
+
+    baseImage =
+      await download(
+        poll.baseImageUrl
+      );
 
     votes.clear();
 
-    const voteMessages = messages
-      .filter(message =>
-        message.content.startsWith("VOTE:")
-      )
-      .sort(
-        (a, b) =>
-          a.createdTimestamp -
-          b.createdTimestamp
-      );
+    const voteMessages =
+      [...messages.values()]
+        .filter(m =>
+          m.content.startsWith("VOTE:")
+        )
+        .sort(
+          (a, b) =>
+            a.createdTimestamp -
+            b.createdTimestamp
+        );
 
     for (const message of voteMessages) {
       try {
-        const record =
+        const vote =
           JSON.parse(
-            message.content.substring(
-              "VOTE:".length
-            )
+            message.content.substring(5)
           );
 
         if (
-          record.pollId === poll.id &&
-          Array.isArray(record.choices)
+          vote.pollId === poll.id
         ) {
           votes.set(
-            record.userId,
-            record.choices
+            vote.userId,
+            vote.choices
           );
         }
-      } catch (error) {
-        // Ignore malformed vote records.
-      }
+      } catch {}
     }
 
-    if (
-      poll.baseImageUrl
-    ) {
-      baseImageBuffer =
-        await downloadBuffer(
-          poll.baseImageUrl
-        );
-    }
-
-    try {
-      const channel =
-        await client.channels.fetch(
-          poll.channelId
-        );
-
-      if (
-        channel &&
-        channel.isTextBased()
-      ) {
-        publicPollMessage =
-          await channel.messages.fetch(
-            poll.messageId
-          );
-      }
-    } catch (error) {
-      console.error(
-        "Could not fetch saved public poll message:",
-        error
+    const channel2 =
+      await client.channels.fetch(
+        poll.channelId
       );
-    }
 
-    if (
-      !publicPollMessage
-    ) {
-      console.log(
-        "Saved poll message could not be found."
+    publicMessage =
+      await channel2.messages.fetch(
+        poll.messageId
       );
-      return;
-    }
 
     if (
       Date.now() >= poll.endAt
@@ -922,24 +804,25 @@ async function loadSavedPoll() {
       return;
     }
 
-    schedulePollClose();
+    scheduleClose();
 
     console.log(
-      `Restored poll ${poll.id} with ${votes.size} votes.`
+      `Restored poll with ${votes.size} votes.`
     );
+
   } catch (error) {
     console.error(
-      "Could not load saved poll:",
+      "Could not restore poll:",
       error
     );
   }
 }
 
 // ============================================================
-// POLL CLOSING
+// CLOSE
 // ============================================================
 
-function schedulePollClose() {
+function scheduleClose() {
   if (closeTimer) {
     clearTimeout(closeTimer);
   }
@@ -956,32 +839,18 @@ function schedulePollClose() {
     return;
   }
 
-  // Node timers have a maximum delay.
-  // This also keeps longer polls safe.
-  const MAX_TIMER =
-    24 * 60 * 60 * 1000;
-
-  closeTimer = setTimeout(
-    schedulePollClose,
-    Math.min(remaining, MAX_TIMER)
-  );
-
-  if (remaining <= MAX_TIMER) {
-    closeTimer = setTimeout(
-      () => closePoll(),
-      remaining
+  closeTimer =
+    setTimeout(
+      closePoll,
+      Math.min(
+        remaining,
+        2147483647
+      )
     );
-  }
 }
 
 async function closePoll() {
-  if (!poll) {
-    return;
-  }
-
-  if (poll.status === "closed") {
-    return;
-  }
+  if (!poll) return;
 
   poll.status = "closed";
 
@@ -991,33 +860,32 @@ async function closePoll() {
   }
 
   try {
-    if (publicPollMessage) {
-      await publicPollMessage.edit({
+    if (publicMessage) {
+      const image =
+        await createResultsImage();
+
+      await publicMessage.edit({
         content:
           "🔒 **POLL CLOSED**",
+        attachments: [],
+        files: [
+          {
+            attachment: image,
+            name: "final-results.jpg"
+          }
+        ],
         components:
-          buildPublicComponents(true)
+          publicComponents(true)
       });
     }
   } catch (error) {
     console.error(
-      "Could not close public poll message:",
+      "Could not close poll:",
       error
     );
   }
 
-  try {
-    await saveState();
-  } catch (error) {
-    console.error(
-      "Could not save closed poll state:",
-      error
-    );
-  }
-
-  console.log(
-    `Poll ${poll.id} closed.`
-  );
+  await saveState();
 }
 
 // ============================================================
@@ -1025,133 +893,151 @@ async function closePoll() {
 // ============================================================
 
 async function createPoll(interaction) {
-  const durationKey =
+  if (
+    poll &&
+    poll.status === "active" &&
+    Date.now() < poll.endAt
+  ) {
+    throw new Error(
+      "There is already an active poll."
+    );
+  }
+
+  const duration =
     interaction.options.getString(
       "duration",
       true
     );
 
-  const duration =
-    DURATIONS[durationKey];
+  const attachments =
+    getAttachments(interaction);
 
-  if (!duration) {
-    throw new Error(
-      "Invalid poll duration."
-    );
-  }
-
-  const attachments = [];
-
-  for (let i = 1; i <= 5; i++) {
-    const attachment =
-      interaction.options.getAttachment(
-        `character${i}`,
-        true
-      );
-
-    if (!isImageAttachment(attachment)) {
+  for (const attachment of attachments) {
+    if (!validImage(attachment)) {
       throw new Error(
-        `Character ${i} is not an image.`
+        "All five character files must be images."
       );
     }
-
-    attachments.push(attachment);
   }
 
   const characters =
-    attachments.map(
-      attachment =>
-        cleanCharacterName(
-          attachment.name
-        )
+    getOptionValues(
+      interaction,
+      "character"
     );
 
-  const imageBuffers = [];
+  const votingOptions =
+    getOptionValues(
+      interaction,
+      "option"
+    );
+
+  const rankingLabels =
+    getOptionValues(
+      interaction,
+      "ranking"
+    );
+
+  const images = [];
 
   for (const attachment of attachments) {
-    imageBuffers.push(
-      await downloadBuffer(
+    images.push(
+      await download(
         attachment.url
       )
     );
   }
 
-  baseImageBuffer =
-    await createBaseImage(
-      imageBuffers
-    );
-
-  const pollId =
-    `${Date.now()}-${interaction.user.id}`;
+  baseImage =
+    await createBaseImage(images);
 
   poll = {
-    type: "state",
-    id: pollId,
+    id:
+      `${Date.now()}-${interaction.user.id}`,
+
     status: "active",
-    guildId: interaction.guildId,
-    channelId: interaction.channelId,
+
+    guildId:
+      interaction.guildId,
+
+    channelId:
+      interaction.channelId,
+
     messageId: null,
+
     endAt:
-      Date.now() + duration.ms,
-    duration: durationKey,
-    durationLabel: duration.label,
+      Date.now() +
+      DURATIONS[duration],
+
+    duration,
+
     characters,
+
+    votingOptions,
+
+    rankingLabels,
+
     baseImageUrl: null,
+
     baseMessageId: null,
-    winners: [0, 1, 2, 3, 4]
+
+    winners: [
+      0,
+      1,
+      2,
+      3,
+      4
+    ]
   };
 
   votes.clear();
   selections.clear();
 
-  // Save the base image in the private data channel.
   await saveBaseImage();
 
-  const resultsImage =
+  const image =
     await createResultsImage();
 
-  publicPollMessage =
+  publicMessage =
     await interaction.channel.send({
-      content: "",
       files: [
         {
-          attachment: resultsImage,
+          attachment: image,
           name: "poll-results.jpg"
         }
       ],
       components:
-        buildPublicComponents(false)
+        publicComponents(false)
     });
 
   poll.messageId =
-    publicPollMessage.id;
+    publicMessage.id;
 
   await saveState();
 
-  schedulePollClose();
+  scheduleClose();
 
   await interaction.editReply({
     content:
-      `✅ Poll created — open for **${duration.label}**.`
+      "✅ Poll created."
   });
 }
 
 // ============================================================
-// OPEN PRIVATE VOTING PANEL
+// OPEN VOTING
 // ============================================================
 
-async function openVotingPanel(interaction) {
+async function openVoting(interaction) {
   if (
     !poll ||
     poll.status !== "active"
   ) {
-    await interaction.reply({
+    return interaction.reply({
       content:
         "This poll is closed.",
-      flags: MessageFlags.Ephemeral
+      flags:
+        MessageFlags.Ephemeral
     });
-
-    return;
   }
 
   if (
@@ -1159,80 +1045,60 @@ async function openVotingPanel(interaction) {
   ) {
     await closePoll();
 
-    await interaction.reply({
+    return interaction.reply({
       content:
         "This poll has closed.",
-      flags: MessageFlags.Ephemeral
+      flags:
+        MessageFlags.Ephemeral
     });
-
-    return;
   }
 
-  const userId =
-    interaction.user.id;
-
-  const previousVote =
-    votes.get(userId);
-
-  if (previousVote) {
-    selections.set(
-      userId,
-      [...previousVote]
+  const previous =
+    votes.get(
+      interaction.user.id
     );
-  } else {
-    selections.set(
-      userId,
-      [null, null, null, null, null]
-    );
-  }
+
+  selections.set(
+    interaction.user.id,
+    previous
+      ? [...previous]
+      : [null, null, null, null, null]
+  );
 
   await interaction.reply({
     content:
-      "**Make your choices.**\n\nEach category can only be used once. Your choices are private until you confirm.",
-    files: [
-      {
-        attachment: baseImageBuffer,
-        name: "poll-vote.jpg"
-      }
-    ],
+      "Choose one option for each character:",
     components:
-      buildVotingComponents(userId),
-    flags: MessageFlags.Ephemeral
+      buildVotingRows(
+        interaction.user.id
+      ),
+    flags:
+      MessageFlags.Ephemeral
   });
 
   if (
-    isCompleteVote(
-      selections.get(userId)
+    complete(
+      selections.get(
+        interaction.user.id
+      )
     )
   ) {
     await interaction.followUp({
       content:
-        "Your current selections are complete.",
+        "Your choices are complete.",
       components:
-        buildConfirmComponents(),
-      flags: MessageFlags.Ephemeral
+        confirmRow(),
+      flags:
+        MessageFlags.Ephemeral
     });
   }
 }
 
 // ============================================================
-// HANDLE CHARACTER SELECTION
+// SELECT
 // ============================================================
 
-async function handleSelection(interaction) {
-  if (
-    !poll ||
-    poll.status !== "active"
-  ) {
-    await interaction.reply({
-      content:
-        "This poll is closed.",
-      flags: MessageFlags.Ephemeral
-    });
-
-    return;
-  }
-
+async function handleSelect(interaction) {
   const parts =
     interaction.customId.split(":");
 
@@ -1240,47 +1106,17 @@ async function handleSelection(interaction) {
   const character =
     Number(parts[2]);
 
-  if (pollId !== poll.id) {
-    await interaction.reply({
-      content:
-        "This voting panel belongs to an older poll.",
-      flags: MessageFlags.Ephemeral
-    });
-
-    return;
-  }
-
   if (
-    !Number.isInteger(character) ||
-    character < 0 ||
-    character > 4
+    !poll ||
+    poll.id !== pollId ||
+    poll.status !== "active"
   ) {
-    await interaction.reply({
+    return interaction.reply({
       content:
-        "Invalid character selection.",
-      flags: MessageFlags.Ephemeral
+        "This poll is no longer active.",
+      flags:
+        MessageFlags.Ephemeral
     });
-
-    return;
-  }
-
-  const selectedCategory =
-    Number(
-      interaction.values[0]
-    );
-
-  if (
-    !Number.isInteger(
-      selectedCategory
-    )
-  ) {
-    await interaction.reply({
-      content:
-        "Invalid category selection.",
-      flags: MessageFlags.Ephemeral
-    });
-
-    return;
   }
 
   let choices =
@@ -1289,309 +1125,42 @@ async function handleSelection(interaction) {
     );
 
   if (!choices) {
-    choices = [
-      null,
-      null,
-      null,
-      null,
-      null
-    ];
+    choices =
+      [null, null, null, null, null];
   }
 
-  // Remove this category from another character
-  // if it was already selected there.
-  for (
-    let i = 0;
-    i < choices.length;
-    i++
-  ) {
+  const selected =
+    Number(
+      interaction.values[0]
+    );
+
+  // Remove the selected option
+  // from any other character.
+  for (let i = 0; i < 5; i++) {
     if (
       i !== character &&
-      choices[i] === selectedCategory
+      choices[i] === selected
     ) {
       choices[i] = null;
     }
   }
 
   choices[character] =
-    selectedCategory;
+    selected;
 
   selections.set(
     interaction.user.id,
     choices
   );
 
-  const complete =
-    isCompleteVote(choices);
-
   await interaction.update({
     components:
-      buildVotingComponents(
+      buildVotingRows(
         interaction.user.id
       )
   });
 
-  if (complete) {
+  if (complete(choices)) {
     await interaction.followUp({
       content:
-        "✅ All five choices are selected. When you're happy with them, confirm your vote below.",
-      components:
-        buildConfirmComponents(),
-      flags: MessageFlags.Ephemeral
-    });
-  }
-}
-
-// ============================================================
-// CONFIRM VOTE
-// ============================================================
-
-async function confirmVote(interaction) {
-  if (
-    !poll ||
-    poll.status !== "active"
-  ) {
-    await interaction.reply({
-      content:
-        "This poll is closed.",
-      flags: MessageFlags.Ephemeral
-    });
-
-    return;
-  }
-
-  const userId =
-    interaction.user.id;
-
-  const choices =
-    selections.get(userId);
-
-  if (!isCompleteVote(choices)) {
-    await interaction.reply({
-      content:
-        "You must assign all five categories exactly once before confirming.",
-      flags: MessageFlags.Ephemeral
-    });
-
-    return;
-  }
-
-  // Save the vote first.
-  await saveVote(
-    userId,
-    [...choices]
-  );
-
-  votes.set(
-    userId,
-    [...choices]
-  );
-
-  const counts =
-    calculateCounts();
-
-  poll.winners =
-    calculateWinners(
-      counts,
-      poll.winners
-    );
-
-  const resultsImage =
-    await createResultsImage();
-
-  if (publicPollMessage) {
-    await publicPollMessage.edit({
-      attachments: [],
-      files: [
-        {
-          attachment: resultsImage,
-          name: "poll-results.jpg"
-        }
-      ],
-      components:
-        buildPublicComponents(false)
-    });
-  }
-
-  await saveState();
-
-  await interaction.update({
-    content:
-      "✅ **Vote confirmed.**",
-    components: []
-  });
-
-  console.log(
-    `Vote confirmed by ${interaction.user.tag}`
-  );
-}
-
-// ============================================================
-// DISCORD EVENTS
-// ============================================================
-
-client.once("ready", async () => {
-  console.log(
-    `Logged in as ${client.user.tag}`
-  );
-
-  try {
-    const rest =
-      new REST({ version: "10" })
-        .setToken(TOKEN);
-
-    await rest.put(
-      Routes.applicationCommands(
-        client.user.id
-      ),
-      {
-        body: [
-          pollCommand.toJSON()
-        ]
-      }
-    );
-
-    console.log(
-      "Slash command registered successfully."
-    );
-  } catch (error) {
-    console.error(
-      "Could not register slash command:",
-      error
-    );
-  }
-
-  await loadSavedPoll();
-});
-
-client.on(
-  "interactionCreate",
-  async interaction => {
-    try {
-      if (
-        interaction.isChatInputCommand()
-      ) {
-        if (
-          interaction.commandName ===
-          "poll"
-        ) {
-          if (
-            poll &&
-            poll.status === "active" &&
-            Date.now() < poll.endAt
-          ) {
-            await interaction.reply({
-              content:
-                "There is already an active poll. Wait for it to finish before creating another.",
-              flags: MessageFlags.Ephemeral
-            });
-
-            return;
-          }
-
-          await interaction.deferReply({
-            flags: MessageFlags.Ephemeral
-          });
-
-          await createPoll(
-            interaction
-          );
-
-          return;
-        }
-      }
-
-      if (
-        interaction.isButton()
-      ) {
-        if (
-          interaction.customId ===
-          "poll_vote"
-        ) {
-          await openVotingPanel(
-            interaction
-          );
-
-          return;
-        }
-
-        if (
-          interaction.customId.startsWith(
-            "poll_confirm:"
-          )
-        ) {
-          await confirmVote(
-            interaction
-          );
-
-          return;
-        }
-      }
-
-      if (
-        interaction.isStringSelectMenu()
-      ) {
-        if (
-          interaction.customId.startsWith(
-            "poll_pick:"
-          )
-        ) {
-          await handleSelection(
-            interaction
-          );
-
-          return;
-        }
-      }
-    } catch (error) {
-      console.error(
-        "Interaction error:",
-        error
-      );
-
-      try {
-        if (
-          interaction.replied ||
-          interaction.deferred
-        ) {
-          await interaction.followUp({
-            content:
-              "Something went wrong. Check the bot logs.",
-            flags: MessageFlags.Ephemeral
-          });
-        } else {
-          await interaction.reply({
-            content:
-              "Something went wrong. Check the bot logs.",
-            flags: MessageFlags.Ephemeral
-          });
-        }
-      } catch (replyError) {
-        console.error(
-          "Could not send error reply:",
-          replyError
-        );
-      }
-    }
-  }
-);
-
-// ============================================================
-// LOGIN
-// ============================================================
-
-if (!TOKEN) {
-  console.error(
-    "DISCORD_TOKEN environment variable is missing."
-  );
-  process.exit(1);
-}
-
-if (!DATA_CHANNEL_ID) {
-  console.error(
-    "POLL_DATA_CHANNEL_ID environment variable is missing."
-  );
-  process.exit(1);
-}
-
-client.login(TOKEN);
+        "✅ All five choices are
