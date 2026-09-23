@@ -14,6 +14,7 @@ const {
   ButtonStyle,
   MessageFlags,
 } = require("discord.js");
+
 const sharp = require("sharp");
 
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -33,6 +34,7 @@ const client = new Client({
 let poll = null;
 let votes = new Map();
 let selections = new Map();
+
 let baseImageBuffer = null;
 let publicPollMessage = null;
 let controlMessage = null;
@@ -123,24 +125,35 @@ function getCounts() {
   return counts;
 }
 
-function getWinners(counts) {
-  const winners = [];
+/*
+ * Finds the most-voted category FOR EACH CHARACTER.
+ *
+ * If two or more categories are tied for first place,
+ * all tied categories are displayed above that character.
+ */
+function getCharacterLeaders(counts) {
+  const leaders = [];
 
-  for (let option = 0; option < 5; option++) {
-    let winner = poll.winners?.[option] ?? option;
-    let highest = counts[option][winner] || 0;
+  for (let character = 0; character < 5; character++) {
+    let highest = 0;
+    const winningOptions = [];
 
-    for (let character = 0; character < 5; character++) {
-      if (counts[option][character] > highest) {
-        highest = counts[option][character];
-        winner = character;
+    for (let option = 0; option < 5; option++) {
+      const count = counts[option][character];
+
+      if (count > highest) {
+        highest = count;
+        winningOptions.length = 0;
+        winningOptions.push(option);
+      } else if (count > 0 && count === highest) {
+        winningOptions.push(option);
       }
     }
 
-    winners.push(winner);
+    leaders.push(winningOptions);
   }
 
-  return winners;
+  return leaders;
 }
 
 function textSize(text, width) {
@@ -149,12 +162,19 @@ function textSize(text, width) {
   if (length <= 12) return Math.min(25, width / 8);
   if (length <= 20) return Math.min(20, width / 10);
   if (length <= 30) return Math.min(16, width / 12);
+
   return Math.min(13, width / 15);
 }
 
-function buildOverlaySvg(counts, winners) {
-  const width = IMAGE_WIDTH * 5 + GAP * 4;
-  const height = TOP_HEIGHT + IMAGE_HEIGHT + BOTTOM_HEIGHT;
+function buildOverlaySvg(counts, leaders) {
+  const width =
+    IMAGE_WIDTH * 5 +
+    GAP * 4;
+
+  const height =
+    TOP_HEIGHT +
+    IMAGE_HEIGHT +
+    BOTTOM_HEIGHT;
 
   let svg = `
     <svg
@@ -163,29 +183,19 @@ function buildOverlaySvg(counts, winners) {
       xmlns="http://www.w3.org/2000/svg"
     >
 
-    <rect
-      width="${width}"
-      height="${height}"
-      fill="#111111"
-    />
+      <rect
+        width="${width}"
+        height="${height}"
+        fill="#111111"
+      />
   `;
 
   /*
-   * TOP:
-   * One winning category above each character.
-   *
-   * If multiple categories are tied on the same character,
-   * they share that character's space horizontally.
+   * TOP
+   * Most-voted category for each character.
    */
-
   for (let character = 0; character < 5; character++) {
-    const winningOptions = [];
-
-    for (let option = 0; option < 5; option++) {
-      if (winners[option] === character) {
-        winningOptions.push(option);
-      }
-    }
+    const winningOptions = leaders[character];
 
     if (!winningOptions.length) continue;
 
@@ -244,11 +254,12 @@ function buildOverlaySvg(counts, winners) {
   }
 
   /*
-   * BOTTOM:
-   * Five symbols with their TOTAL number of votes.
+   * BOTTOM
+   * Symbol + total votes for each category.
    */
-
-  const bottomY = TOP_HEIGHT + IMAGE_HEIGHT;
+  const bottomY =
+    TOP_HEIGHT +
+    IMAGE_HEIGHT;
 
   const cellWidth =
     width / 5;
@@ -300,13 +311,11 @@ function buildOverlaySvg(counts, winners) {
   return Buffer.from(svg);
 }
 
-async function buildPollImage() {
-  const counts = getCounts();
-
-  const winners = getWinners(counts);
-
-  poll.winners = winners;
-
+/*
+ * Creates the clean five-character image.
+ * This is what gets stored privately in #mayorbot-data.
+ */
+async function buildBaseImage() {
   const width =
     IMAGE_WIDTH * 5 +
     GAP * 4;
@@ -337,12 +346,6 @@ async function buildPollImage() {
     panels.push(image);
   }
 
-  const overlay =
-    buildOverlaySvg(
-      counts,
-      winners
-    );
-
   return await sharp({
     create: {
       width,
@@ -351,15 +354,35 @@ async function buildPollImage() {
       background: "#111111",
     },
   })
-    .composite([
-      ...panels.map((image, index) => ({
+    .composite(
+      panels.map((image, index) => ({
         input: image,
         left:
           index *
           (IMAGE_WIDTH + GAP),
         top: TOP_HEIGHT,
-      })),
+      }))
+    )
+    .jpeg({
+      quality: 92,
+    })
+    .toBuffer();
+}
 
+async function buildPollImage() {
+  const counts = getCounts();
+  const leaders = getCharacterLeaders(counts);
+
+  poll.characterLeaders = leaders;
+
+  const overlay =
+    buildOverlaySvg(
+      counts,
+      leaders
+    );
+
+  return await sharp(baseImageBuffer)
+    .composite([
       {
         input: overlay,
         left: 0,
@@ -433,11 +456,18 @@ async function saveState() {
   }
 
   const state = {
-    schemaVersion: 3,
+    schemaVersion: 4,
+
     pollId: poll.id,
-    duration: poll.duration,
-    startTime: poll.startTime,
-    endTime: poll.endTime,
+
+    duration:
+      poll.duration,
+
+    startTime:
+      poll.startTime,
+
+    endTime:
+      poll.endTime,
 
     publicChannelId:
       poll.publicChannelId,
@@ -467,8 +497,8 @@ async function saveState() {
     resultLabels:
       poll.resultLabels,
 
-    winners:
-      poll.winners,
+    characterLeaders:
+      poll.characterLeaders,
 
     status:
       poll.status,
@@ -533,7 +563,10 @@ function buildMenus(userId) {
               }) =>
                 new StringSelectMenuOptionBuilder()
                   .setLabel(
-                    truncate(label, 100)
+                    truncate(
+                      label,
+                      100
+                    )
                   )
                   .setValue(
                     String(optionIndex)
@@ -746,17 +779,10 @@ async function closePoll() {
     closeTimer = null;
   }
 
-  try {
-    if (publicPollMessage) {
-      await publicPollMessage.edit({
-        content:
-          "POLL CLOSED",
-        attachments: [],
-        components: [],
-      });
-    }
-  } catch {}
-
+  /*
+   * Keep the final results image visible.
+   * Only disable the voting buttons.
+   */
   try {
     if (controlMessage) {
       const disabledRows =
@@ -848,32 +874,12 @@ async function loadSavedPoll() {
   }
 
   /*
-   * Version 2 was the previous layout.
-   * It is deliberately ignored so the old test
-   * poll cannot interfere with the new version.
+   * Only version 4 is used.
+   * Older test polls are ignored.
    */
   if (
-    saved.schemaVersion !== 3
+    saved.schemaVersion !== 4
   ) {
-    try {
-      const channel =
-        await client.channels.fetch(
-          saved.publicChannelId
-        );
-
-      const message =
-        await channel.messages.fetch(
-          saved.publicMessageId
-        );
-
-      await message.edit({
-        content:
-          "POLL CLOSED",
-        attachments: [],
-        components: [],
-      });
-    } catch {}
-
     return;
   }
 
@@ -891,6 +897,7 @@ async function loadSavedPoll() {
 
   poll = {
     ...saved,
+
     characters:
       saved.characters.map(
         (character) => ({
@@ -911,6 +918,9 @@ async function loadSavedPoll() {
   const dataChannel =
     await getDataChannel();
 
+  /*
+   * Restore the clean character strip.
+   */
   try {
     const baseMessage =
       await dataChannel.messages.fetch(
@@ -930,7 +940,12 @@ async function loadSavedPoll() {
       await downloadBuffer(
         attachment.url
       );
-  } catch {
+  } catch (error) {
+    console.error(
+      "Could not restore base image:",
+      error
+    );
+
     poll = null;
     return;
   }
@@ -940,10 +955,15 @@ async function loadSavedPoll() {
       saved.publicChannelId
     );
 
-  publicPollMessage =
-    await publicChannel.messages.fetch(
-      saved.publicMessageId
-    );
+  try {
+    publicPollMessage =
+      await publicChannel.messages.fetch(
+        saved.publicMessageId
+      );
+  } catch {
+    poll = null;
+    return;
+  }
 
   try {
     controlMessage =
@@ -1069,7 +1089,6 @@ async function createPoll(
 
   const voteLabels = [];
   const symbols = [];
-  const resultLabels = [];
 
   for (let i = 1; i <= 5; i++) {
     const symbol =
@@ -1083,13 +1102,6 @@ async function createPoll(
       clean(
         interaction.options.getString(
           `vote${i}`
-        )
-      );
-
-    const result =
-      clean(
-        interaction.options.getString(
-          `result${i}`
         )
       );
 
@@ -1107,9 +1119,6 @@ async function createPoll(
 
     symbols.push(symbol);
     voteLabels.push(vote);
-    resultLabels.push(
-      result || vote
-    );
   }
 
   if (
@@ -1122,6 +1131,41 @@ async function createPoll(
     return interaction.editReply(
       "The five voting options must all be different."
     );
+  }
+
+  /*
+   * Result labels are entered in ONE optional field,
+   * separated with |.
+   *
+   * Example:
+   * Married | Snogged | Smashed | Friend-zoned | Killed
+   *
+   * If left blank, the voting option names are used.
+   */
+  const resultText =
+    clean(
+      interaction.options.getString(
+        "results"
+      )
+    );
+
+  let resultLabels;
+
+  if (resultText) {
+    resultLabels =
+      resultText
+        .split("|")
+        .map(clean)
+        .filter(Boolean);
+
+    if (resultLabels.length !== 5) {
+      return interaction.editReply(
+        "The Results field must contain exactly 5 names separated by |"
+      );
+    }
+  } else {
+    resultLabels =
+      [...voteLabels];
   }
 
   const imageBuffers = [];
@@ -1155,10 +1199,10 @@ async function createPoll(
     endTime:
       Date.now() +
       durationDays *
-        24 *
-        60 *
-        60 *
-        1000,
+      24 *
+      60 *
+      60 *
+      1000,
 
     publicChannelId:
       interaction.channelId,
@@ -1188,8 +1232,8 @@ async function createPoll(
 
     resultLabels,
 
-    winners:
-      [0, 1, 2, 3, 4],
+    characterLeaders:
+      [[], [], [], [], []],
 
     status:
       "active",
@@ -1199,11 +1243,17 @@ async function createPoll(
   selections = new Map();
 
   try {
+    /*
+     * Build and privately store the clean image.
+     */
     baseImageBuffer =
-      await buildPollImage();
+      await buildBaseImage();
 
     await saveBaseImage();
 
+    /*
+     * Build the actual public results image.
+     */
     const resultImage =
       await buildPollImage();
 
@@ -1270,9 +1320,10 @@ async function createPoll(
     scheduleClose();
 
     /*
-     * No "Poll created" message is left behind.
+     * Remove the private "Poll created" reply.
      */
     await interaction.deleteReply();
+
   } catch (error) {
     console.error(error);
 
@@ -1322,6 +1373,9 @@ const pollCommand =
           )
     );
 
+/*
+ * 5 images
+ */
 for (let i = 1; i <= 5; i++) {
   pollCommand.addAttachmentOption(
     (option) =>
@@ -1334,6 +1388,9 @@ for (let i = 1; i <= 5; i++) {
   );
 }
 
+/*
+ * 5 character names
+ */
 for (let i = 1; i <= 5; i++) {
   pollCommand.addStringOption(
     (option) =>
@@ -1346,6 +1403,9 @@ for (let i = 1; i <= 5; i++) {
   );
 }
 
+/*
+ * 5 symbols
+ */
 for (let i = 1; i <= 5; i++) {
   pollCommand.addStringOption(
     (option) =>
@@ -1358,6 +1418,9 @@ for (let i = 1; i <= 5; i++) {
   );
 }
 
+/*
+ * 5 voting option names
+ */
 for (let i = 1; i <= 5; i++) {
   pollCommand.addStringOption(
     (option) =>
@@ -1370,17 +1433,21 @@ for (let i = 1; i <= 5; i++) {
   );
 }
 
-for (let i = 1; i <= 5; i++) {
-  pollCommand.addStringOption(
-    (option) =>
-      option
-        .setName(`result${i}`)
-        .setDescription(
-          `Name above character ${i}`
-        )
-        .setRequired(false)
-  );
-}
+/*
+ * ONE optional results field.
+ *
+ * Example:
+ * Married | Snogged | Smashed | Friend-zoned | Killed
+ */
+pollCommand.addStringOption(
+  (option) =>
+    option
+      .setName("results")
+      .setDescription(
+        "Optional: 5 result names separated by |"
+      )
+      .setRequired(false)
+);
 
 const endPollCommand =
   new SlashCommandBuilder()
@@ -1428,6 +1495,7 @@ client.once("ready", async () => {
     console.log(
       "Startup complete."
     );
+
   } catch (error) {
     console.error(
       "Startup error:",
@@ -1440,9 +1508,11 @@ client.on(
   "interactionCreate",
   async (interaction) => {
     try {
+
       if (
         interaction.isChatInputCommand()
       ) {
+
         if (
           interaction.commandName ===
           "poll"
@@ -1450,6 +1520,7 @@ client.on(
           await createPoll(
             interaction
           );
+
           return;
         }
 
@@ -1457,10 +1528,11 @@ client.on(
           interaction.commandName ===
           "endpoll"
         ) {
+
           if (
             !poll ||
             poll.status !==
-              "active"
+            "active"
           ) {
             return interaction.reply({
               content:
@@ -1484,6 +1556,7 @@ client.on(
       if (
         interaction.isButton()
       ) {
+
         if (
           interaction.customId ===
           "vote"
@@ -1491,6 +1564,7 @@ client.on(
           await openVote(
             interaction
           );
+
           return;
         }
 
@@ -1501,6 +1575,7 @@ client.on(
           await confirmVote(
             interaction
           );
+
           return;
         }
       }
@@ -1508,6 +1583,7 @@ client.on(
       if (
         interaction.isStringSelectMenu()
       ) {
+
         if (
           interaction.customId.startsWith(
             "choice:"
@@ -1518,6 +1594,7 @@ client.on(
           );
         }
       }
+
     } catch (error) {
       console.error(error);
 
