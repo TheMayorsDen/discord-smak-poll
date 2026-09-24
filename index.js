@@ -23,6 +23,10 @@ ChannelType,
 const sharp = require("sharp");
 const TOKEN = process.env.DISCORD_TOKEN;
 const POLL_DATA_CHANNEL_ID = process.env.POLL_DATA_CHANNEL_ID;
+// Optional: set this to your server's ID for instant command updates
+// while testing. Global commands (no GUILD_ID set) can take up to an
+// hour for Discord to propagate to every client.
+const GUILD_ID = process.env.GUILD_ID;
 const PORT = process.env.PORT || 3000;
 /*
 * Each character gets its OWN image (not one giant
@@ -902,9 +906,24 @@ const endPollCommand = new SlashCommandBuilder()
 .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
 async function registerCommands() {
 const rest = new REST({ version: "10" }).setToken(TOKEN);
-await rest.put(Routes.applicationCommands(client.user.id), {
-body: [pollCommand.toJSON(), endPollCommand.toJSON()],
-});
+const body = [pollCommand.toJSON(), endPollCommand.toJSON()];
+if (GUILD_ID) {
+// Guild-specific commands appear instantly — use this while testing.
+await rest.put(Routes.applicationGuildCommands(client.user.id, GUILD_ID), { body });
+// Clear out any old GLOBAL commands from before GUILD_ID was set, so
+// there's no stale duplicate /poll (missing the channel option)
+// sitting alongside the new one and causing confusion.
+try {
+await rest.put(Routes.applicationCommands(client.user.id), { body: [] });
+console.log("Cleared old global commands.");
+} catch (error) {
+console.error("Could not clear old global commands:", error.message);
+}
+} else {
+// Global commands are visible in every server the bot is in, but can
+// take up to an hour for Discord to fully propagate.
+await rest.put(Routes.applicationCommands(client.user.id), { body });
+}
 }
 /*
 * BOT READY
