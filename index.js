@@ -18,6 +18,7 @@ TextInputStyle,
 MessageFlags,
 ContainerBuilder,
 TextDisplayBuilder,
+ChannelType,
 } = require("discord.js");
 const sharp = require("sharp");
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -247,14 +248,16 @@ const badgeWidth =
 winningOptions.forEach((option, index) => {
 const x = 10 + index * (badgeWidth + gap);
 const label = poll.resultLabels[option];
-const fontSize = textSize(label, badgeWidth);
+const count = counts[option][characterIndex];
+const labelWithCount = `${label} (${count})`;
+const fontSize = textSize(labelWithCount, badgeWidth);
 svg += `
 <rect x="${x}" y="14" width="${badgeWidth}" height="${BADGE_HEIGHT - 28}"
 rx="16" fill="#242424" stroke="#ffffff" stroke-width="2"/>
 <text x="${x + badgeWidth / 2}" y="${BADGE_HEIGHT / 2}"
 text-anchor="middle" dominant-baseline="middle" fill="white"
 font-family="Arial, sans-serif" font-size="${fontSize}px" font-weight="700">
-${escapeSvg(truncate(label, 35))}
+${escapeSvg(truncate(labelWithCount, 35))}
 </text>
 `;
 });
@@ -685,6 +688,14 @@ content: "There is already an active poll. Use `/endpoll` first.",
 flags: MessageFlags.Ephemeral,
 });
 }
+const targetChannel = interaction.options.getChannel("channel") || interaction.channel;
+if (targetChannel.id === POLL_DATA_CHANNEL_ID) {
+return interaction.reply({
+content:
+"That's the bot's private data channel (used to store poll info behind the scenes) — polls can't be posted there. Pick a different channel with the `channel` option, or run `/poll` from the channel you want it in.",
+flags: MessageFlags.Ephemeral,
+});
+}
 const duration = interaction.options.getString("duration");
 const characters = [];
 for (let i = 1; i <= 5; i++) {
@@ -709,7 +720,7 @@ pendingSetups.set(interaction.user.id, {
 setupId,
 duration,
 characters,
-channelId: interaction.channelId,
+channelId: targetChannel.id,
 });
 setTimeout(() => {
 const pending = pendingSetups.get(interaction.user.id);
@@ -867,6 +878,13 @@ option
 { name: "7 days", value: "7d" },
 { name: "14 days", value: "14d" }
 )
+)
+.addChannelOption((option) =>
+option
+.setName("channel")
+.setDescription("Where to post the finished poll (defaults to this channel)")
+.addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+.setRequired(false)
 );
 for (let i = 1; i <= 5; i++) {
 pollCommand.addAttachmentOption((option) =>
