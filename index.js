@@ -34,7 +34,7 @@ const PHOTO_HEIGHT = 1050;
 const BADGE_HEIGHT = 120; // top: winning category name
 const SYMBOL_BAR_HEIGHT = 140; // bottom: symbols + counts
 const SYMBOL_ICON_SIZE = 56;
-const TWEMOJI_BASE = "https://cdn.jsdelivr.net/gh/jdecked/twemoji@latest/assets/72x72/";
+const TWEMOJI_BASE = "https://raw.githubusercontent.com/jdecked/twemoji/main/assets/72x72/";
 const SCHEMA_VERSION = 6;
 const client = new Client({
 intents: [GatewayIntentBits.Guilds],
@@ -83,7 +83,9 @@ if (length <= 30) return Math.min(17, width / 12);
 return Math.min(14, width / 15);
 }
 async function downloadBuffer(url) {
-const response = await fetch(url);
+// A hard timeout so a stalled network request can never hang poll
+// creation indefinitely.
+const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
 if (!response.ok) {
 throw new Error(`Image download failed: ${response.status}`);
 }
@@ -140,25 +142,31 @@ async function fetchSymbolImage(rawSymbol) {
   return null;
 }
 
+// Cached across the whole process, not just one poll, so re-using the
+// same emoji (e.g. \ud83d\udd25 in several polls) never needs a second fetch.
+const symbolImageCache = new Map();
 async function buildSymbolImages(symbols) {
   const images = [];
   for (const symbol of symbols) {
-    const buffer = await fetchSymbolImage(symbol);
-    if (!buffer) {
-      images.push(null);
+    const key = cleanSymbol(symbol);
+    if (symbolImageCache.has(key)) {
+      images.push(symbolImageCache.get(key));
       continue;
     }
-    try {
-      images.push(
-        await sharp(buffer)
+    const buffer = await fetchSymbolImage(symbol);
+    let processed = null;
+    if (buffer) {
+      try {
+        processed = await sharp(buffer)
           .resize(SYMBOL_ICON_SIZE, SYMBOL_ICON_SIZE, { fit: "contain" })
           .png()
-          .toBuffer()
-      );
-    } catch (error) {
-      console.error("Could not process symbol image:", error.message);
-      images.push(null);
+          .toBuffer();
+      } catch (error) {
+        console.error("Could not process symbol image:", error.message);
+      }
     }
+    symbolImageCache.set(key, processed);
+    images.push(processed);
   }
   return images;
 }
@@ -312,15 +320,37 @@ background: "#111111",
 .jpeg({ quality: 92 })
 .toBuffer();
 }
-async function buildAllResultImages() {
+// All 5 characters are stitched into ONE image and sent as a single
+// attachment. Sending 5 separate attachments lets Discord's own client
+// auto-arrange them into a multi-row grid (and shrink each one further
+// to fit), which is what was splitting the poll across two rows. One
+// wide image guarantees a single row every time.
+async function buildCombinedResultImage() {
 const counts = getCounts();
 const leaders = getCharacterLeaders(counts);
 poll.characterLeaders = leaders;
-const images = [];
+const panels = [];
 for (let i = 0; i < 5; i++) {
-images.push(await buildCharacterResultImage(i, counts, leaders));
+panels.push(await buildCharacterResultImage(i, counts, leaders));
 }
-return images;
+const panelHeight = BADGE_HEIGHT + PHOTO_HEIGHT + SYMBOL_BAR_HEIGHT;
+return await sharp({
+create: {
+width: PHOTO_WIDTH * 5,
+height: panelHeight,
+channels: 3,
+background: "#111111",
+},
+})
+.composite(
+panels.map((buffer, index) => ({
+input: buffer,
+left: index * PHOTO_WIDTH,
+top: 0,
+}))
+)
+.jpeg({ quality: 90 })
+.toBuffer();
 }
 /*
 * PERSISTENCE
@@ -392,14 +422,11 @@ new ButtonBuilder()
 }
 async function updatePublicImage() {
 if (!poll || !publicPollMessage) return;
-const images = await buildAllResultImages();
+const combined = await buildCombinedResultImage();
 await publicPollMessage.edit({
 content: poll.status === "active" ? null : "🔒 Poll closed — thanks for voting!",
 attachments: [],
-files: images.map(
-(buffer, index) =>
-new AttachmentBuilder(buffer, { name: `poll-${index}.jpg` })
-),
+files: [new AttachmentBuilder(combined, { name: "poll-results.jpg" })],
 components: [buildVoteButtonRow(poll.status !== "active")],
 });
 }
@@ -546,6 +573,11 @@ votes.set(interaction.user.id, {
 choices: [...current],
 timestamp: Date.now(),
 });
+// Acknowledge within Discord's 3-second window FIRST — updatePublicImage()
+// rebuilds the combined result image, which is too slow to finish before
+// that window closes if done beforehand (this was causing "didn't
+// respond in time" on Confirm Vote).
+await interaction.deferUpdate();
 await saveVote(interaction.user.id, current);
 await updatePublicImage();
 await saveState();
@@ -553,7 +585,7 @@ const panel = buildVotePanel(
 interaction.user.id,
 "✅ **Vote submitted!** Reopen with the Vote button anytime to change it before the poll closes."
 );
-await interaction.update(panel);
+await interaction.editReply(panel);
 }
 /*
 * CLOSE / SCHEDULE
@@ -723,6 +755,27 @@ flags: MessageFlags.Ephemeral,
 });
 }
 await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+// Safety net against duplicate posts: if two instances of this bot are
+// ever briefly running at once (e.g. mid-redeploy on Render), both can
+// receive and act on the same modal submission. If a poll was already
+// created in the last 20 seconds, assume that's what happened and stop
+// here rather than posting a second one.
+try {
+const dataChannel = await getDataChannel();
+const recent = await dataChannel.messages.fetch({ limit: 5 });
+const justCreated = recent.find(
+(message) =>
+message.content?.startsWith("POLL_BASE|") &&
+Date.now() - message.createdTimestamp < 20000
+);
+if (justCreated) {
+return interaction.editReply(
+"A poll was just created (likely by a duplicate bot process finishing a fraction of a second earlier). Check the channel — if it's not there, run `/poll` again."
+);
+}
+} catch (error) {
+console.error("Duplicate-poll safety check failed (continuing anyway):", error);
+}
 const symbols = [];
 const voteLabels = [];
 const resultLabels = [];
@@ -780,12 +833,10 @@ votes = new Map();
 selections = new Map();
 try {
 await saveBaseImages();
-const images = await buildAllResultImages();
+const combined = await buildCombinedResultImage();
 const channel = await client.channels.fetch(pending.channelId);
 publicPollMessage = await channel.send({
-files: images.map(
-(buffer, index) => new AttachmentBuilder(buffer, { name: `poll-${index}.jpg` })
-),
+files: [new AttachmentBuilder(combined, { name: "poll-results.jpg" })],
 components: [buildVoteButtonRow()],
 });
 poll.publicMessageId = publicPollMessage.id;
@@ -874,11 +925,12 @@ content: "There is no active poll.",
 flags: MessageFlags.Ephemeral,
 });
 }
+// Acknowledge within Discord's 3-second window FIRST — closePoll()
+// rebuilds the result image and saves state, which is too slow to
+// finish before that window closes if done beforehand.
+await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 await closePoll();
-return interaction.reply({
-content: "Poll ended.",
-flags: MessageFlags.Ephemeral,
-});
+return interaction.editReply({ content: "Poll ended." });
 }
 return;
 }
