@@ -724,13 +724,6 @@ poll.status === "draft"
 flags: MessageFlags.Ephemeral,
 });
 }
-if (interaction.channel.id === POLL_DATA_CHANNEL_ID) {
-return interaction.reply({
-content:
-"That's the bot's private data channel (used to store poll info behind the scenes) — run `/poll` from the channel you actually want the draft preview in.",
-flags: MessageFlags.Ephemeral,
-});
-}
 const draftChannelId = interaction.channel.id;
 const targetChannel = interaction.options.getChannel("channel");
 if (targetChannel.id === POLL_DATA_CHANNEL_ID) {
