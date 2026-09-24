@@ -38,7 +38,7 @@ const PORT = process.env.PORT || 3000;
 // number of voting categories (each character is assigned one of these).
 // These are independent of each other.
 const CHARACTER_COUNT = 4;
-const CATEGORY_COUNT = 5;
+const CATEGORY_COUNT = 4;
 const PHOTO_WIDTH = 700;
 const PHOTO_HEIGHT = 1050;
 const BADGE_HEIGHT = 120; // top: winning category name
@@ -282,8 +282,8 @@ No votes yet
 // Bottom symbol bar — this character's votes per category
 const barY = BADGE_HEIGHT + PHOTO_HEIGHT;
 svg += `<rect x="0" y="${barY}" width="${width}" height="${SYMBOL_BAR_HEIGHT}" fill="#111111"/>`;
-const cellWidth = width / 5;
-for (let option = 0; option < 5; option++) {
+const cellWidth = width / CATEGORY_COUNT;
+for (let option = 0; option < CATEGORY_COUNT; option++) {
 const count = counts[option][characterIndex];
 const centerX = cellWidth * option + cellWidth / 2;
 // The symbol itself is drawn separately as a real image (see
@@ -305,12 +305,12 @@ async function buildCharacterResultImage(characterIndex, counts, leaders) {
 const overlay = buildResultOverlaySvg(characterIndex, counts, leaders);
 const height = BADGE_HEIGHT + PHOTO_HEIGHT + SYMBOL_BAR_HEIGHT;
 const barY = BADGE_HEIGHT + PHOTO_HEIGHT;
-const cellWidth = PHOTO_WIDTH / 5;
+const cellWidth = PHOTO_WIDTH / CATEGORY_COUNT;
 const composites = [
 { input: poll.photos[characterIndex], top: BADGE_HEIGHT, left: 0 },
 { input: overlay, top: 0, left: 0 },
 ];
-for (let option = 0; option < 5; option++) {
+for (let option = 0; option < CATEGORY_COUNT; option++) {
 const icon = poll.symbolImages && poll.symbolImages[option];
 if (!icon) continue;
 const centerX = cellWidth * option + cellWidth / 2;
@@ -751,8 +751,8 @@ pendingSetups.delete(interaction.user.id);
 }, 10 * 60 * 1000);
 const modal = new ModalBuilder()
 .setCustomId("poll-categories")
-.setTitle("Voting categories (up to 5)");
-for (let i = 1; i <= 5; i++) {
+.setTitle("Voting categories (up to 4)");
+for (let i = 1; i <= CATEGORY_COUNT; i++) {
 modal.addComponents(
 new ActionRowBuilder().addComponents(
 new TextInputBuilder()
@@ -811,7 +811,7 @@ console.error("Duplicate-poll safety check failed (continuing anyway):", error);
 const symbols = [];
 const voteLabels = [];
 const resultLabels = [];
-for (let i = 1; i <= 5; i++) {
+for (let i = 1; i <= CATEGORY_COUNT; i++) {
 const raw = clean(interaction.fields.getTextInputValue(`cat${i}`));
 const parts = raw.split("|").map((part) => part.trim());
 const symbol = cleanSymbol(parts[0]);
@@ -826,8 +826,8 @@ symbols.push(symbol);
 voteLabels.push(vote);
 resultLabels.push(result || vote);
 }
-if (new Set(voteLabels.map((v) => v.toLowerCase())).size !== 5) {
-return interaction.editReply("The five category labels must all be different.");
+if (new Set(voteLabels.map((v) => v.toLowerCase())).size !== CATEGORY_COUNT) {
+return interaction.editReply("The four category labels must all be different.");
 }
 const durationDays = { "1d": 1, "3d": 3, "7d": 7, "14d": 14 }[pending.duration];
 const photos = [];
