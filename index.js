@@ -414,6 +414,7 @@ await old.delete();
 const state = {
 schemaVersion: SCHEMA_VERSION,
 pollId: poll.id,
+title: poll.title,
 duration: poll.duration,
 startTime: poll.startTime,
 endTime: poll.endTime,
@@ -444,11 +445,22 @@ new ButtonBuilder()
 .setDisabled(disabled)
 );
 }
+function buildConfirmPublishRow(channelName) {
+return new ActionRowBuilder().addComponents(
+new ButtonBuilder()
+.setCustomId("publish-poll")
+.setLabel(`Publish to #${channelName}`.slice(0, 80))
+.setStyle(ButtonStyle.Success)
+);
+}
 async function updatePublicImage() {
 if (!poll || !publicPollMessage) return;
 const combined = await buildCombinedResultImage();
 await publicPollMessage.edit({
-content: poll.status === "active" ? null : "?? Poll closed — thanks for voting!",
+content:
+poll.status === "active"
+? `**${poll.title}**`
+: `**${poll.title}**\n\n🔒 Poll closed — thanks for voting!`,
 attachments: [],
 files: [new AttachmentBuilder(combined, { name: "poll-results.jpg" })],
 components: [buildVoteButtonRow(poll.status !== "active")],
@@ -703,17 +715,27 @@ scheduleClose();
 * /poll command: images + names, then a modal for categories.
 */
 async function startPollSetup(interaction) {
-if (poll && poll.status === "active") {
+if (poll && poll.status !== "closed") {
 return interaction.reply({
-content: "There is already an active poll. Use `/endpoll` first.",
+content:
+poll.status === "draft"
+? "There's already a drafted poll waiting to be published (or discarded with `/endpoll`)."
+: "There is already an active poll. Use `/endpoll` first.",
 flags: MessageFlags.Ephemeral,
 });
 }
-const targetChannel = interaction.options.getChannel("channel") || interaction.channel;
-if (targetChannel.id === POLL_DATA_CHANNEL_ID) {
+if (interaction.channel.id === POLL_DATA_CHANNEL_ID) {
 return interaction.reply({
 content:
-"That's the bot's private data channel (used to store poll info behind the scenes) — polls can't be posted there. Pick a different channel with the `channel` option, or run `/poll` from the channel you want it in.",
+"That's the bot's private data channel (used to store poll info behind the scenes) — run `/poll` from the channel you actually want the draft preview in.",
+flags: MessageFlags.Ephemeral,
+});
+}
+const draftChannelId = interaction.channel.id;
+const targetChannel = interaction.options.getChannel("channel");
+if (targetChannel.id === POLL_DATA_CHANNEL_ID) {
+return interaction.reply({
+content: "That's the bot's private data channel — pick a different channel to publish to.",
 flags: MessageFlags.Ephemeral,
 });
 }
@@ -741,7 +763,9 @@ pendingSetups.set(interaction.user.id, {
 setupId,
 duration,
 characters,
-channelId: targetChannel.id,
+draftChannelId,
+targetChannelId: targetChannel.id,
+targetChannelName: targetChannel.name,
 });
 setTimeout(() => {
 const pending = pendingSetups.get(interaction.user.id);
@@ -751,13 +775,24 @@ pendingSetups.delete(interaction.user.id);
 }, 10 * 60 * 1000);
 const modal = new ModalBuilder()
 .setCustomId("poll-categories")
-.setTitle("Voting categories (up to 4)");
+.setTitle("Poll title & voting categories");
+modal.addComponents(
+new ActionRowBuilder().addComponents(
+new TextInputBuilder()
+.setCustomId("poll-title")
+.setLabel("Poll title (shown at the top when published)")
+.setStyle(TextInputStyle.Short)
+.setPlaceholder("e.g. Character Ship Poll 2026")
+.setRequired(true)
+.setMaxLength(100)
+)
+);
 for (let i = 1; i <= CATEGORY_COUNT; i++) {
 modal.addComponents(
 new ActionRowBuilder().addComponents(
 new TextInputBuilder()
 .setCustomId(`cat${i}`)
-.setLabel(`Category ${i}: symbol | label | result?`)
+.setLabel(`Category ${i}: symbol | dropdown text | result?`)
 .setStyle(TextInputStyle.Short)
 .setPlaceholder("?? | Marriage | Wedded")
 .setRequired(true)
@@ -780,7 +815,7 @@ flags: MessageFlags.Ephemeral,
 });
 }
 pendingSetups.delete(interaction.user.id);
-if (poll && poll.status === "active") {
+if (poll && poll.status !== "closed") {
 return interaction.reply({
 content: "Someone already started a poll first. Use `/endpoll` then try again.",
 flags: MessageFlags.Ephemeral,
@@ -808,6 +843,10 @@ return interaction.editReply(
 } catch (error) {
 console.error("Duplicate-poll safety check failed (continuing anyway):", error);
 }
+const title = clean(interaction.fields.getTextInputValue("poll-title"));
+if (!title) {
+return interaction.editReply("The poll title can't be empty.");
+}
 const symbols = [];
 const voteLabels = [];
 const resultLabels = [];
@@ -819,7 +858,7 @@ const vote = clean(parts[1]);
 const result = clean(parts[2]);
 if (!symbol || !vote) {
 return interaction.editReply(
-`Category ${i} needs a symbol and a label separated by "|", e.g. ?? | Marriage`
+`Category ${i} needs a symbol and dropdown text separated by "|", e.g. ?? | Marriage`
 );
 }
 symbols.push(symbol);
@@ -827,7 +866,7 @@ voteLabels.push(vote);
 resultLabels.push(result || vote);
 }
 if (new Set(voteLabels.map((v) => v.toLowerCase())).size !== CATEGORY_COUNT) {
-return interaction.editReply("The four category labels must all be different.");
+return interaction.editReply("The four category dropdown texts must all be different.");
 }
 const durationDays = { "1d": 1, "3d": 3, "7d": 7, "14d": 14 }[pending.duration];
 const photos = [];
@@ -846,10 +885,13 @@ return interaction.editReply(`I couldn't process one of the images: ${error.mess
 const symbolImages = await buildSymbolImages(symbols);
 poll = {
 id: makeId(),
+title,
 duration: durationDays,
-startTime: Date.now(),
-endTime: Date.now() + durationDays * 24 * 60 * 60 * 1000,
-publicChannelId: pending.channelId,
+startTime: null,
+endTime: null,
+draftChannelId: pending.draftChannelId,
+draftMessageId: null,
+publicChannelId: pending.targetChannelId,
 publicMessageId: null,
 baseImageMessageId: null,
 characters: pending.characters.map((character) => ({ name: character.name })),
@@ -858,27 +900,86 @@ voteLabels,
 symbols,
 symbolImages,
 resultLabels,
-characterLeaders: [[], [], [], [], []],
-status: "active",
+characterLeaders: Array.from({ length: CHARACTER_COUNT }, () => []),
+status: "draft",
 };
 votes = new Map();
 selections = new Map();
 try {
 await saveBaseImages();
 const combined = await buildCombinedResultImage();
-const channel = await client.channels.fetch(pending.channelId);
-publicPollMessage = await channel.send({
+const draftChannel = await client.channels.fetch(pending.draftChannelId);
+const draftMessage = await draftChannel.send({
+content:
+`**${title}**\n\n` +
+`📝 **Draft poll — preview only, nobody can vote on this yet.** ` +
+`Press the button below when you're happy with it to publish to <#${pending.targetChannelId}>, or run \`/endpoll\` to discard it.`,
 files: [new AttachmentBuilder(combined, { name: "poll-results.jpg" })],
-components: [buildVoteButtonRow()],
+components: [buildConfirmPublishRow(pending.targetChannelName)],
 });
-poll.publicMessageId = publicPollMessage.id;
-await saveState();
-scheduleClose();
+poll.draftMessageId = draftMessage.id;
 await interaction.deleteReply();
 } catch (error) {
 console.error(error);
 poll = null;
 await interaction.editReply(`Something went wrong: ${error.message}`);
+}
+}
+/*
+* SETUP FLOW — PART 3
+* "Publish" button on the draft preview: moves the drafted poll into
+* the channel chosen back at /poll time, adds the vote button, and starts the countdown timer.
+*/
+async function publishPoll(interaction) {
+if (!poll || poll.status !== "draft") {
+return interaction.reply({
+content: "There's no drafted poll waiting to be published — run `/poll` first.",
+flags: MessageFlags.Ephemeral,
+});
+}
+if (!interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+return interaction.reply({
+content: "You don't have permission to publish this poll.",
+flags: MessageFlags.Ephemeral,
+});
+}
+let targetChannel;
+try {
+targetChannel = await client.channels.fetch(poll.publicChannelId);
+} catch (error) {
+return interaction.reply({
+content: `Couldn't find the channel this was set to publish to: ${error.message}`,
+flags: MessageFlags.Ephemeral,
+});
+}
+await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+try {
+const combined = await buildCombinedResultImage();
+publicPollMessage = await targetChannel.send({
+content: `**${poll.title}**`,
+files: [new AttachmentBuilder(combined, { name: "poll-results.jpg" })],
+components: [buildVoteButtonRow()],
+});
+poll.startTime = Date.now();
+poll.endTime = Date.now() + poll.duration * 24 * 60 * 60 * 1000;
+poll.publicMessageId = publicPollMessage.id;
+poll.status = "active";
+await saveState();
+scheduleClose();
+try {
+const draftChannel = await client.channels.fetch(poll.draftChannelId);
+const draftMessage = await draftChannel.messages.fetch(poll.draftMessageId);
+await draftMessage.edit({
+content: `✅ **Published to <#${targetChannel.id}>** — voting is now open there.`,
+components: [],
+});
+} catch (error) {
+console.error("Could not update the draft preview message:", error.message);
+}
+await interaction.editReply(`✅ Poll published to <#${targetChannel.id}>. Voting is now open.`);
+} catch (error) {
+console.error(error);
+await interaction.editReply(`Something went wrong publishing the poll: ${error.message}`);
 }
 }
 /*
@@ -910,14 +1011,12 @@ pollCommand.addStringOption((option) =>
 option.setName(`name${i}`).setDescription(`Character ${i} name`).setRequired(true)
 );
 }
-// Optional options must come after all required ones (Discord API
-// rule) — that's why this was moved down here.
 pollCommand.addChannelOption((option) =>
 option
 .setName("channel")
-.setDescription("Where to post the finished poll (defaults to this channel)")
+.setDescription("Where to publish the poll once you confirm the draft")
 .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
-.setRequired(false)
+.setRequired(true)
 );
 const endPollCommand = new SlashCommandBuilder()
 .setName("endpoll")
@@ -975,16 +1074,29 @@ processingInteractions.delete(interaction.id);
 return;
 }
 if (interaction.commandName === "endpoll") {
-if (!poll || poll.status !== "active") {
+if (!poll || poll.status === "closed") {
 return interaction.reply({
-content: "There is no active poll.",
+content: "There is no poll in progress.",
 flags: MessageFlags.Ephemeral,
 });
+}
+await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+if (poll.status === "draft") {
+try {
+const draftChannel = await client.channels.fetch(poll.draftChannelId);
+const draftMessage = await draftChannel.messages.fetch(poll.draftMessageId);
+await draftMessage.edit({ content: "🗑️ **Draft discarded.**", components: [] });
+} catch (error) {
+console.error("Could not update the discarded draft message:", error.message);
+}
+poll = null;
+votes = new Map();
+selections = new Map();
+return interaction.editReply({ content: "Draft discarded." });
 }
 // Acknowledge within Discord's 3-second window FIRST — closePoll()
 // rebuilds the result image and saves state, which is too slow to
 // finish before that window closes if done beforehand.
-await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 await closePoll();
 return interaction.editReply({ content: "Poll ended." });
 }
@@ -995,6 +1107,16 @@ if (processingInteractions.has(interaction.id)) return;
 processingInteractions.add(interaction.id);
 try {
 await finishPollSetup(interaction);
+} finally {
+processingInteractions.delete(interaction.id);
+}
+return;
+}
+if (interaction.isButton() && interaction.customId === "publish-poll") {
+if (processingInteractions.has(interaction.id)) return;
+processingInteractions.add(interaction.id);
+try {
+await publishPoll(interaction);
 } finally {
 processingInteractions.delete(interaction.id);
 }
