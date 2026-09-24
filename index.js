@@ -34,6 +34,11 @@ const PORT = process.env.PORT || 3000;
 * in a message as a grid, and each one renders much
 * larger than a slice of one super-wide image would.
 */
+// Number of characters/pictures in a poll (each gets one image) and
+// number of voting categories (each character is assigned one of these).
+// These are independent of each other.
+const CHARACTER_COUNT = 4;
+const CATEGORY_COUNT = 5;
 const PHOTO_WIDTH = 700;
 const PHOTO_HEIGHT = 1050;
 const BADGE_HEIGHT = 120; // top: winning category name
@@ -199,12 +204,12 @@ return messages;
 * that category for that character.
 */
 function getCounts() {
-const counts = Array.from({ length: 5 }, () => Array(5).fill(0));
+const counts = Array.from({ length: CATEGORY_COUNT }, () => Array(CHARACTER_COUNT).fill(0));
 for (const vote of votes.values()) {
 if (!vote.choices) continue;
-for (let character = 0; character < 5; character++) {
+for (let character = 0; character < CHARACTER_COUNT; character++) {
 const option = vote.choices[character];
-if (option >= 0 && option < 5) {
+if (option >= 0 && option < CATEGORY_COUNT) {
 counts[option][character]++;
 }
 }
@@ -213,10 +218,10 @@ return counts;
 }
 function getCharacterLeaders(counts) {
 const leaders = [];
-for (let character = 0; character < 5; character++) {
+for (let character = 0; character < CHARACTER_COUNT; character++) {
 let highest = 0;
 const winningOptions = [];
-for (let option = 0; option < 5; option++) {
+for (let option = 0; option < CATEGORY_COUNT; option++) {
 const count = counts[option][character];
 if (count > highest) {
 highest = count;
@@ -327,35 +332,47 @@ background: "#111111",
 .jpeg({ quality: 92 })
 .toBuffer();
 }
-// All 5 characters are stitched into ONE image and sent as a single
-// attachment. Sending 5 separate attachments lets Discord's own client
-// auto-arrange them into a multi-row grid (and shrink each one further
-// to fit), which is what was splitting the poll across two rows. One
-// wide image guarantees a single row every time.
+// All characters are stitched into ONE image and sent as a single
+// attachment, arranged as a neat 2-wide grid, rather than sent as
+// separate attachments — Discord's own client auto-arranges multiple
+// attachments into its own grid (shrinking each one further to fit),
+// which is what used to split/duplicate the poll unpredictably. Also,
+// Discord caps how wide it will ever display an attached image in a
+// message regardless of the file's actual resolution, so a single
+// long row of panels always renders tiny — a 2-wide grid instead
+// means each panel gets a much bigger share of that same fixed width.
 async function buildCombinedResultImage() {
 const counts = getCounts();
 const leaders = getCharacterLeaders(counts);
 poll.characterLeaders = leaders;
 const panels = [];
-for (let i = 0; i < 5; i++) {
+for (let i = 0; i < CHARACTER_COUNT; i++) {
 panels.push(await buildCharacterResultImage(i, counts, leaders));
 }
 const panelHeight = BADGE_HEIGHT + PHOTO_HEIGHT + SYMBOL_BAR_HEIGHT;
+const COLUMNS = 2;
+const rowCount = Math.ceil(panels.length / COLUMNS);
+const canvasWidth = PHOTO_WIDTH * COLUMNS;
+const composites = panels.map((buffer, index) => {
+const row = Math.floor(index / COLUMNS);
+const col = index % COLUMNS;
+const panelsInThisRow = Math.min(COLUMNS, panels.length - row * COLUMNS);
+const rowOffset = (canvasWidth - PHOTO_WIDTH * panelsInThisRow) / 2;
+return {
+input: buffer,
+left: Math.round(rowOffset + col * PHOTO_WIDTH),
+top: row * panelHeight,
+};
+});
 return await sharp({
 create: {
-width: PHOTO_WIDTH * 5,
-height: panelHeight,
+width: canvasWidth,
+height: panelHeight * rowCount,
 channels: 3,
 background: "#111111",
 },
 })
-.composite(
-panels.map((buffer, index) => ({
-input: buffer,
-left: index * PHOTO_WIDTH,
-top: 0,
-}))
-)
+.composite(composites)
 .jpeg({ quality: 90 })
 .toBuffer();
 }
@@ -416,7 +433,7 @@ stateMessageId = message.id;
 /*
 * PUBLIC MESSAGE
 *
-* Just the 5 photos + one "Vote / Change Vote" button.
+* Just the 4 photos + one "Vote / Change Vote" button.
 */
 function buildVoteButtonRow(disabled = false) {
 return new ActionRowBuilder().addComponents(
@@ -431,7 +448,7 @@ async function updatePublicImage() {
 if (!poll || !publicPollMessage) return;
 const combined = await buildCombinedResultImage();
 await publicPollMessage.edit({
-content: poll.status === "active" ? null : "🔒 Poll closed — thanks for voting!",
+content: poll.status === "active" ? null : "?? Poll closed — thanks for voting!",
 attachments: [],
 files: [new AttachmentBuilder(combined, { name: "poll-results.jpg" })],
 components: [buildVoteButtonRow(poll.status !== "active")],
@@ -440,16 +457,16 @@ components: [buildVoteButtonRow(poll.status !== "active")],
 /*
 * PRIVATE VOTE PANEL
 *
-* All 5 dropdowns shown together, one per character, plus a
+* All 4 dropdowns shown together, one per character, plus a
 * Confirm Vote button. Nothing is saved until Confirm is pressed
-* (and the button stays disabled until all 5 are picked). Built
+* (and the button stays disabled until all 4 are picked). Built
 * with Components V2 so the dropdowns + button + status text can
 * all sit in one panel — classic components cap out at 5 action
-* rows total, which the 5 dropdowns alone would already use up,
-* leaving no room for a Confirm button.
+* rows total, which would leave no room for a Confirm button
+* alongside 5 dropdowns, though with 4 there's exactly enough room.
 */
 function buildCategorySelectRow(userId, characterIndex) {
-const current = selections.get(userId) || Array(5).fill(null);
+const current = selections.get(userId) || Array(CHARACTER_COUNT).fill(null);
 const currentChoice = current[characterIndex];
 const usedByOthers = new Set(
 current.filter((value, index) => value !== null && index !== characterIndex)
@@ -479,7 +496,7 @@ new StringSelectMenuOptionBuilder()
 return new ActionRowBuilder().addComponents(menu);
 }
 function assignedCount(userId) {
-const current = selections.get(userId) || Array(5).fill(null);
+const current = selections.get(userId) || Array(CHARACTER_COUNT).fill(null);
 return current.filter((value) => value !== null).length;
 }
 function buildConfirmRow(userId) {
@@ -487,24 +504,24 @@ const assigned = assignedCount(userId);
 return new ActionRowBuilder().addComponents(
 new ButtonBuilder()
 .setCustomId("confirm-vote")
-.setLabel(assigned === 5 ? "Confirm Vote ✅" : `Confirm Vote (${assigned}/5 picked)`)
+.setLabel(assigned === CHARACTER_COUNT ? "Confirm Vote ✅" : `Confirm Vote (${assigned}/${CHARACTER_COUNT} picked)`)
 .setStyle(ButtonStyle.Success)
-.setDisabled(assigned !== 5)
+.setDisabled(assigned !== CHARACTER_COUNT)
 );
 }
 function statusTextFor(userId, extra) {
 if (extra) return extra;
 const assigned = assignedCount(userId);
-if (assigned === 5) {
-return "All five picked. Press **Confirm Vote** below to lock it in — you can still change any dropdown first.";
+if (assigned === CHARACTER_COUNT) {
+return "All four picked. Press **Confirm Vote** below to lock it in — you can still change any dropdown first.";
 }
-return `Pick one category per character. **${assigned}/5** chosen so far.`;
+return `Pick one category per character. **${assigned}/${CHARACTER_COUNT}** chosen so far.`;
 }
 function buildVotePanel(userId, statusMessage) {
 const container = new ContainerBuilder().addTextDisplayComponents(
 new TextDisplayBuilder().setContent(statusTextFor(userId, statusMessage))
 );
-for (let index = 0; index < 5; index++) {
+for (let index = 0; index < CHARACTER_COUNT; index++) {
 container.addActionRowComponents(buildCategorySelectRow(userId, index));
 }
 container.addActionRowComponents(buildConfirmRow(userId));
@@ -524,7 +541,7 @@ if (!selections.has(interaction.user.id)) {
 const previous = votes.get(interaction.user.id);
 selections.set(
 interaction.user.id,
-previous ? [...previous.choices] : Array(5).fill(null)
+previous ? [...previous.choices] : Array(CHARACTER_COUNT).fill(null)
 );
 }
 return interaction.reply(buildVotePanel(interaction.user.id));
@@ -540,17 +557,17 @@ const characterIndex = Number(interaction.customId.split(":")[1]);
 const optionIndex = Number(interaction.values[0]);
 if (
 characterIndex < 0 ||
-characterIndex >= 5 ||
+characterIndex >= CHARACTER_COUNT ||
 optionIndex < 0 ||
-optionIndex >= 5
+optionIndex >= CATEGORY_COUNT
 ) {
 return interaction.reply({
 content: "Invalid selection.",
 flags: MessageFlags.Ephemeral,
 });
 }
-const current = selections.get(interaction.user.id) || Array(5).fill(null);
-for (let index = 0; index < 5; index++) {
+const current = selections.get(interaction.user.id) || Array(CHARACTER_COUNT).fill(null);
+for (let index = 0; index < CHARACTER_COUNT; index++) {
 if (index !== characterIndex && current[index] === optionIndex) {
 return interaction.reply({
 content: "That category is already assigned to another character.",
@@ -569,10 +586,10 @@ content: "This poll is closed.",
 flags: MessageFlags.Ephemeral,
 });
 }
-const current = selections.get(interaction.user.id) || Array(5).fill(null);
-if (assignedCount(interaction.user.id) !== 5) {
+const current = selections.get(interaction.user.id) || Array(CHARACTER_COUNT).fill(null);
+if (assignedCount(interaction.user.id) !== CHARACTER_COUNT) {
 return interaction.reply({
-content: "Pick a category for all five characters before confirming.",
+content: "Pick a category for all four characters before confirming.",
 flags: MessageFlags.Ephemeral,
 });
 }
@@ -647,8 +664,8 @@ const baseMessage = await dataChannel.messages.fetch(saved.baseImageMessageId);
 const attachments = [...baseMessage.attachments.values()].sort((a, b) =>
 a.name.localeCompare(b.name)
 );
-if (attachments.length !== 5) {
-throw new Error("Expected 5 base images.");
+if (attachments.length !== CHARACTER_COUNT) {
+throw new Error(`Expected ${CHARACTER_COUNT} base images.`);
 }
 poll.photos = await Promise.all(attachments.map((a) => downloadBuffer(a.url)));
 } catch (error) {
@@ -702,7 +719,7 @@ flags: MessageFlags.Ephemeral,
 }
 const duration = interaction.options.getString("duration");
 const characters = [];
-for (let i = 1; i <= 5; i++) {
+for (let i = 1; i <= CHARACTER_COUNT; i++) {
 const image = interaction.options.getAttachment(`image${i}`);
 const name = clean(interaction.options.getString(`name${i}`));
 if (!image) {
@@ -742,7 +759,7 @@ new TextInputBuilder()
 .setCustomId(`cat${i}`)
 .setLabel(`Category ${i}: symbol | label | result?`)
 .setStyle(TextInputStyle.Short)
-.setPlaceholder("💍 | Marriage | Wedded")
+.setPlaceholder("?? | Marriage | Wedded")
 .setRequired(true)
 .setMaxLength(80)
 )
@@ -802,7 +819,7 @@ const vote = clean(parts[1]);
 const result = clean(parts[2]);
 if (!symbol || !vote) {
 return interaction.editReply(
-`Category ${i} needs a symbol and a label separated by "|", e.g. 💍 | Marriage`
+`Category ${i} needs a symbol and a label separated by "|", e.g. ?? | Marriage`
 );
 }
 symbols.push(symbol);
@@ -869,7 +886,7 @@ await interaction.editReply(`Something went wrong: ${error.message}`);
 */
 const pollCommand = new SlashCommandBuilder()
 .setName("poll")
-.setDescription("Create a five-character poll")
+.setDescription("Create a four-character poll")
 .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 .addStringOption((option) =>
 option
@@ -890,12 +907,12 @@ option
 .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
 .setRequired(false)
 );
-for (let i = 1; i <= 5; i++) {
+for (let i = 1; i <= CHARACTER_COUNT; i++) {
 pollCommand.addAttachmentOption((option) =>
 option.setName(`image${i}`).setDescription(`Picture ${i}`).setRequired(true)
 );
 }
-for (let i = 1; i <= 5; i++) {
+for (let i = 1; i <= CHARACTER_COUNT; i++) {
 pollCommand.addStringOption((option) =>
 option.setName(`name${i}`).setDescription(`Character ${i} name`).setRequired(true)
 );
