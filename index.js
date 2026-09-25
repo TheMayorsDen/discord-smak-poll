@@ -749,9 +749,17 @@ flags: MessageFlags.Ephemeral,
 }
 characters.push({ name, url: image.url });
 }
+const title = clean(interaction.options.getString("title"));
+if (!title) {
+return interaction.reply({
+content: "The poll title can't be empty.",
+flags: MessageFlags.Ephemeral,
+});
+}
 const setupId = makeId();
 pendingSetups.set(interaction.user.id, {
 setupId,
+title,
 duration,
 characters,
 draftChannelId,
@@ -766,18 +774,7 @@ pendingSetups.delete(interaction.user.id);
 }, 10 * 60 * 1000);
 const modal = new ModalBuilder()
 .setCustomId("poll-categories")
-.setTitle("Poll title & voting categories");
-modal.addComponents(
-new ActionRowBuilder().addComponents(
-new TextInputBuilder()
-.setCustomId("poll-title")
-.setLabel("Poll title (shown at the top when published)")
-.setStyle(TextInputStyle.Short)
-.setPlaceholder("e.g. Character Ship Poll 2026")
-.setRequired(true)
-.setMaxLength(100)
-)
-);
+.setTitle("Voting categories");
 for (let i = 1; i <= CATEGORY_COUNT; i++) {
 modal.addComponents(
 new ActionRowBuilder().addComponents(
@@ -834,10 +831,7 @@ return interaction.editReply(
 } catch (error) {
 console.error("Duplicate-poll safety check failed (continuing anyway):", error);
 }
-const title = clean(interaction.fields.getTextInputValue("poll-title"));
-if (!title) {
-return interaction.editReply("The poll title can't be empty.");
-}
+const title = pending.title;
 const symbols = [];
 const voteLabels = [];
 const resultLabels = [];
@@ -984,6 +978,13 @@ const pollCommand = new SlashCommandBuilder()
 .setName("poll")
 .setDescription("Create a four-character poll")
 .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+.addStringOption((option) =>
+option
+.setName("title")
+.setDescription("Poll title (shown at the top when published)")
+.setRequired(true)
+.setMaxLength(100)
+)
 .addStringOption((option) =>
 option
 .setName("duration")
