@@ -476,38 +476,38 @@ components: [buildVoteButtonRow(poll.status !== "active")],
 * rows total, which would leave no room for a Confirm button
 * alongside 5 dropdowns, though with 4 there's exactly enough room.
 */
-function buildCharacterSelectRow(userId, categoryIndex) {
-const current = selections.get(userId) || Array(CATEGORY_COUNT).fill(null);
-const currentChoice = current[categoryIndex];
+function buildCategorySelectRow(userId, characterIndex) {
+const current = selections.get(userId) || Array(CHARACTER_COUNT).fill(null);
+const currentChoice = current[characterIndex];
 const usedByOthers = new Set(
-current.filter((value, index) => value !== null && index !== categoryIndex)
+current.filter((value, index) => value !== null && index !== characterIndex)
 );
-const available = poll.characters
-.map((character, characterIndex) => ({ name: character.name, characterIndex }))
+const available = poll.voteLabels
+.map((label, optionIndex) => ({ label, optionIndex }))
 .filter(
-({ characterIndex }) => !usedByOthers.has(characterIndex) || characterIndex === currentChoice
+({ optionIndex }) => !usedByOthers.has(optionIndex) || optionIndex === currentChoice
 );
-const categoryLabel = poll.voteLabels[categoryIndex];
+const characterName = poll.characters[characterIndex].name;
 const menu = new StringSelectMenuBuilder()
-.setCustomId(`choice:${categoryIndex}`)
+.setCustomId(`choice:${characterIndex}`)
 .setPlaceholder(
 currentChoice === null
-? `${truncate(categoryLabel, 40)} — choose a character`
-: `${truncate(categoryLabel, 30)} — ${truncate(poll.characters[currentChoice].name, 40)}`
+? `${truncate(characterName, 40)} — choose a category`
+: `${truncate(characterName, 30)} — ${truncate(poll.voteLabels[currentChoice], 40)}`
 )
 .addOptions(
 available.map(
-({ name, characterIndex }) =>
+({ label, optionIndex }) =>
 new StringSelectMenuOptionBuilder()
-.setLabel(truncate(name, 100))
-.setValue(String(characterIndex))
-.setDefault(currentChoice === characterIndex)
+.setLabel(truncate(label, 100))
+.setValue(String(optionIndex))
+.setDefault(currentChoice === optionIndex)
 )
 );
 return new ActionRowBuilder().addComponents(menu);
 }
 function assignedCount(userId) {
-const current = selections.get(userId) || Array(CATEGORY_COUNT).fill(null);
+const current = selections.get(userId) || Array(CHARACTER_COUNT).fill(null);
 return current.filter((value) => value !== null).length;
 }
 function buildConfirmRow(userId) {
@@ -515,50 +515,31 @@ const assigned = assignedCount(userId);
 return new ActionRowBuilder().addComponents(
 new ButtonBuilder()
 .setCustomId("confirm-vote")
-.setLabel(assigned === CATEGORY_COUNT ? "Confirm Vote ✅" : `Confirm Vote (${assigned}/${CATEGORY_COUNT} picked)`)
+.setLabel(assigned === CHARACTER_COUNT ? "Confirm Vote ✅" : `Confirm Vote (${assigned}/${CHARACTER_COUNT} picked)`)
 .setStyle(ButtonStyle.Success)
-.setDisabled(assigned !== CATEGORY_COUNT)
+.setDisabled(assigned !== CHARACTER_COUNT)
 );
 }
 function statusTextFor(userId, extra) {
 if (extra) return extra;
 const assigned = assignedCount(userId);
-if (assigned === CATEGORY_COUNT) {
+if (assigned === CHARACTER_COUNT) {
 return "All four picked. Press **Confirm Vote** below to lock it in — you can still change any dropdown first.";
 }
-return `Pick one character per category. **${assigned}/${CATEGORY_COUNT}** chosen so far.`;
+return `Pick one category per character. **${assigned}/${CHARACTER_COUNT}** chosen so far.`;
 }
 function buildVotePanel(userId, statusMessage) {
 const container = new ContainerBuilder().addTextDisplayComponents(
 new TextDisplayBuilder().setContent(statusTextFor(userId, statusMessage))
 );
-for (let index = 0; index < CATEGORY_COUNT; index++) {
-container.addActionRowComponents(buildCharacterSelectRow(userId, index));
+for (let index = 0; index < CHARACTER_COUNT; index++) {
+container.addActionRowComponents(buildCategorySelectRow(userId, index));
 }
 container.addActionRowComponents(buildConfirmRow(userId));
 return {
 components: [container],
 flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,
 };
-}
-// The in-progress `selections` Map is indexed by CATEGORY (one dropdown
-// per category, picking a character) since that's how people vote now.
-// The persisted `vote.choices` format stays indexed by CHARACTER (one
-// slot per character, holding which category it got) — unchanged so
-// getCounts/badges/symbol bar etc. don't need to know anything changed.
-function toCategoryIndexed(choices) {
-const result = Array(CATEGORY_COUNT).fill(null);
-choices.forEach((categoryIndex, characterIndex) => {
-if (categoryIndex !== null && categoryIndex !== undefined) result[categoryIndex] = characterIndex;
-});
-return result;
-}
-function toCharacterIndexed(current) {
-const result = Array(CHARACTER_COUNT).fill(null);
-current.forEach((characterIndex, categoryIndex) => {
-if (characterIndex !== null && characterIndex !== undefined) result[characterIndex] = categoryIndex;
-});
-return result;
 }
 async function openVote(interaction) {
 if (!poll || poll.status !== "active") {
@@ -571,7 +552,7 @@ if (!selections.has(interaction.user.id)) {
 const previous = votes.get(interaction.user.id);
 selections.set(
 interaction.user.id,
-previous ? toCategoryIndexed(previous.choices) : Array(CATEGORY_COUNT).fill(null)
+previous ? [...previous.choices] : Array(CHARACTER_COUNT).fill(null)
 );
 }
 return interaction.reply(buildVotePanel(interaction.user.id));
@@ -583,29 +564,29 @@ content: "This poll is closed.",
 flags: MessageFlags.Ephemeral,
 });
 }
-const categoryIndex = Number(interaction.customId.split(":")[1]);
-const characterIndex = Number(interaction.values[0]);
+const characterIndex = Number(interaction.customId.split(":")[1]);
+const optionIndex = Number(interaction.values[0]);
 if (
-categoryIndex < 0 ||
-categoryIndex >= CATEGORY_COUNT ||
 characterIndex < 0 ||
-characterIndex >= CHARACTER_COUNT
+characterIndex >= CHARACTER_COUNT ||
+optionIndex < 0 ||
+optionIndex >= CATEGORY_COUNT
 ) {
 return interaction.reply({
 content: "Invalid selection.",
 flags: MessageFlags.Ephemeral,
 });
 }
-const current = selections.get(interaction.user.id) || Array(CATEGORY_COUNT).fill(null);
-for (let index = 0; index < CATEGORY_COUNT; index++) {
-if (index !== categoryIndex && current[index] === characterIndex) {
+const current = selections.get(interaction.user.id) || Array(CHARACTER_COUNT).fill(null);
+for (let index = 0; index < CHARACTER_COUNT; index++) {
+if (index !== characterIndex && current[index] === optionIndex) {
 return interaction.reply({
-content: "That character is already assigned to another category.",
+content: "That category is already assigned to another character.",
 flags: MessageFlags.Ephemeral,
 });
 }
 }
-current[categoryIndex] = characterIndex;
+current[characterIndex] = optionIndex;
 selections.set(interaction.user.id, [...current]);
 await interaction.update(buildVotePanel(interaction.user.id));
 }
@@ -616,16 +597,15 @@ content: "This poll is closed.",
 flags: MessageFlags.Ephemeral,
 });
 }
-const current = selections.get(interaction.user.id) || Array(CATEGORY_COUNT).fill(null);
-if (assignedCount(interaction.user.id) !== CATEGORY_COUNT) {
+const current = selections.get(interaction.user.id) || Array(CHARACTER_COUNT).fill(null);
+if (assignedCount(interaction.user.id) !== CHARACTER_COUNT) {
 return interaction.reply({
-content: "Pick a character for every category before confirming.",
+content: "Pick a category for all four characters before confirming.",
 flags: MessageFlags.Ephemeral,
 });
 }
-const choices = toCharacterIndexed(current);
 votes.set(interaction.user.id, {
-choices,
+choices: [...current],
 timestamp: Date.now(),
 });
 // Acknowledge within Discord's 3-second window FIRST — updatePublicImage()
@@ -633,7 +613,7 @@ timestamp: Date.now(),
 // that window closes if done beforehand (this was causing "didn't
 // respond in time" on Confirm Vote).
 await interaction.deferUpdate();
-await saveVote(interaction.user.id, choices);
+await saveVote(interaction.user.id, current);
 await updatePublicImage();
 await saveState();
 const panel = buildVotePanel(
