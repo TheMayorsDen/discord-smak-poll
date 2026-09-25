@@ -886,7 +886,11 @@ try {
 for (const character of pending.characters) {
 const raw = await downloadBuffer(character.url);
 const resized = await sharp(raw)
-.resize(PHOTO_WIDTH, PHOTO_HEIGHT, { fit: "cover", position: "centre" })
+.resize(PHOTO_WIDTH, PHOTO_HEIGHT, {
+fit: "contain",
+position: "centre",
+background: "#111111",
+})
 .jpeg({ quality: 92 })
 .toBuffer();
 photos.push(resized);
