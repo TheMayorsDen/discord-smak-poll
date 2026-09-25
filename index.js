@@ -101,6 +101,22 @@ throw new Error(`Image download failed: ${response.status}`);
 }
 return Buffer.from(await response.arrayBuffer());
 }
+// Uploaded character PNGs often have a different amount of empty
+// transparent margin baked in around the subject, which is why they
+// used to come out looking like different sizes even though every
+// panel is the same fixed box. Trimming that margin off first means
+// each character is scaled up to fill the box as much as possible,
+// so they all read as roughly the same size. Trim can fail on an
+// image with nothing to trim (e.g. a subject that already touches
+// every edge), so any failure just falls back to the original.
+async function trimTransparentMargins(buffer) {
+try {
+return await sharp(buffer).trim().toBuffer();
+} catch (error) {
+console.error("Could not trim image margins, using original:", error.message);
+return buffer;
+}
+}
 /*
  * SYMBOL IMAGES
  *
@@ -239,9 +255,9 @@ return leaders;
 * IMAGE BUILDING
 *
 * Each character gets one tall image:
-* [ winning category badge(s) ]
-* [ photo ]
 * [ symbols + vote counts ]
+* [ photo ]
+* [ winning category badge(s) ]
 */
 function buildResultOverlaySvg(characterIndex, counts, leaders) {
 const width = PHOTO_WIDTH;
@@ -266,8 +282,8 @@ ${count}
 </text>
 `;
 }
-// Below that: winning-category badge area, still above the photo
-const badgeY = SYMBOL_BAR_HEIGHT;
+// Below the photo: winning-category badge area
+const badgeY = SYMBOL_BAR_HEIGHT + PHOTO_HEIGHT;
 svg += `<rect x="0" y="${badgeY}" width="${width}" height="${BADGE_HEIGHT}" fill="#111111"/>`;
 if (winningOptions.length) {
 const gap = 8;
@@ -306,7 +322,7 @@ const overlay = buildResultOverlaySvg(characterIndex, counts, leaders);
 const height = SYMBOL_BAR_HEIGHT + BADGE_HEIGHT + PHOTO_HEIGHT;
 const cellWidth = PHOTO_WIDTH / CATEGORY_COUNT;
 const composites = [
-{ input: poll.photos[characterIndex], top: SYMBOL_BAR_HEIGHT + BADGE_HEIGHT, left: 0 },
+{ input: poll.photos[characterIndex], top: SYMBOL_BAR_HEIGHT, left: 0 },
 { input: overlay, top: 0, left: 0 },
 ];
 for (let option = 0; option < CATEGORY_COUNT; option++) {
@@ -858,12 +874,14 @@ const photos = [];
 try {
 for (const character of pending.characters) {
 const raw = await downloadBuffer(character.url);
-const resized = await sharp(raw)
+const trimmed = await trimTransparentMargins(raw);
+const resized = await sharp(trimmed)
 .resize(PHOTO_WIDTH, PHOTO_HEIGHT, {
 fit: "contain",
 position: "centre",
 background: "#111111",
 })
+.flatten({ background: "#111111" })
 .jpeg({ quality: 92 })
 .toBuffer();
 photos.push(resized);
