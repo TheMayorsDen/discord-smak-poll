@@ -804,7 +804,7 @@ modal.addComponents(
 new ActionRowBuilder().addComponents(
 new TextInputBuilder()
 .setCustomId(`cat${i}`)
-.setLabel(`Category ${i}: symbol | dropdown text | result?`)
+.setLabel(`Category ${i}: symbol | category name | result?`)
 .setStyle(TextInputStyle.Short)
 .setPlaceholder("?? | Marriage | Wedded")
 .setRequired(true)
@@ -870,7 +870,7 @@ const vote = clean(parts[1]);
 const result = clean(parts[2]);
 if (!symbol || !vote) {
 return interaction.editReply(
-`Category ${i} needs a symbol and dropdown text separated by "|", e.g. ?? | Marriage`
+`Category ${i} needs a symbol and a category name separated by "|", e.g. ?? | Marriage`
 );
 }
 symbols.push(symbol);
@@ -878,7 +878,7 @@ voteLabels.push(vote);
 resultLabels.push(result || vote);
 }
 if (new Set(voteLabels.map((v) => v.toLowerCase())).size !== CATEGORY_COUNT) {
-return interaction.editReply("The four category dropdown texts must all be different.");
+return interaction.editReply("The four category names must all be different.");
 }
 const durationDays = { "1d": 1, "3d": 3, "7d": 7, "14d": 14 }[pending.duration];
 const photos = [];
