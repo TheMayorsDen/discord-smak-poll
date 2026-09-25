@@ -245,11 +245,30 @@ return leaders;
 */
 function buildResultOverlaySvg(characterIndex, counts, leaders) {
 const width = PHOTO_WIDTH;
-const height = BADGE_HEIGHT + PHOTO_HEIGHT + SYMBOL_BAR_HEIGHT;
+const height = SYMBOL_BAR_HEIGHT + BADGE_HEIGHT + PHOTO_HEIGHT;
 const winningOptions = leaders[characterIndex] || [];
 let svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">`;
-// Top badge area
-svg += `<rect x="0" y="0" width="${width}" height="${BADGE_HEIGHT}" fill="#111111"/>`;
+// Top: symbol bar — this character's vote count per category. The
+// symbol icon itself is drawn separately as a real image (see
+// buildCharacterResultImage) — text-based emoji rendering is
+// unreliable on headless servers. This just draws the counts,
+// positioned below where each icon sits.
+svg += `<rect x="0" y="0" width="${width}" height="${SYMBOL_BAR_HEIGHT}" fill="#111111"/>`;
+const cellWidth = width / CATEGORY_COUNT;
+for (let option = 0; option < CATEGORY_COUNT; option++) {
+const count = counts[option][characterIndex];
+const centerX = cellWidth * option + cellWidth / 2;
+svg += `
+<text x="${centerX}" y="${SYMBOL_BAR_HEIGHT / 2 + 34}"
+text-anchor="middle" dominant-baseline="middle" fill="white"
+font-family="Arial, sans-serif" font-size="26px" font-weight="700">
+${count}
+</text>
+`;
+}
+// Below that: winning-category badge area, still above the photo
+const badgeY = SYMBOL_BAR_HEIGHT;
+svg += `<rect x="0" y="${badgeY}" width="${width}" height="${BADGE_HEIGHT}" fill="#111111"/>`;
 if (winningOptions.length) {
 const gap = 8;
 const badgeWidth =
@@ -261,9 +280,9 @@ const count = counts[option][characterIndex];
 const labelWithCount = `${label} (${count})`;
 const fontSize = textSize(labelWithCount, badgeWidth);
 svg += `
-<rect x="${x}" y="14" width="${badgeWidth}" height="${BADGE_HEIGHT - 28}"
+<rect x="${x}" y="${badgeY + 14}" width="${badgeWidth}" height="${BADGE_HEIGHT - 28}"
 rx="16" fill="#242424" stroke="#ffffff" stroke-width="2"/>
-<text x="${x + badgeWidth / 2}" y="${BADGE_HEIGHT / 2}"
+<text x="${x + badgeWidth / 2}" y="${badgeY + BADGE_HEIGHT / 2}"
 text-anchor="middle" dominant-baseline="middle" fill="white"
 font-family="Arial, sans-serif" font-size="${fontSize}px" font-weight="700">
 ${escapeSvg(truncate(labelWithCount, 35))}
@@ -272,29 +291,10 @@ ${escapeSvg(truncate(labelWithCount, 35))}
 });
 } else {
 svg += `
-<text x="${width / 2}" y="${BADGE_HEIGHT / 2}" text-anchor="middle"
+<text x="${width / 2}" y="${badgeY + BADGE_HEIGHT / 2}" text-anchor="middle"
 dominant-baseline="middle" fill="#777777" font-family="Arial, sans-serif"
 font-size="20px">
 No votes yet
-</text>
-`;
-}
-// Bottom symbol bar — this character's votes per category
-const barY = BADGE_HEIGHT + PHOTO_HEIGHT;
-svg += `<rect x="0" y="${barY}" width="${width}" height="${SYMBOL_BAR_HEIGHT}" fill="#111111"/>`;
-const cellWidth = width / CATEGORY_COUNT;
-for (let option = 0; option < CATEGORY_COUNT; option++) {
-const count = counts[option][characterIndex];
-const centerX = cellWidth * option + cellWidth / 2;
-// The symbol itself is drawn separately as a real image (see
-// buildCharacterResultImage) — text-based emoji rendering is
-// unreliable on headless servers. This just draws the count,
-// positioned below where that image sits.
-svg += `
-<text x="${centerX}" y="${barY + SYMBOL_BAR_HEIGHT / 2 + 34}"
-text-anchor="middle" dominant-baseline="middle" fill="white"
-font-family="Arial, sans-serif" font-size="26px" font-weight="700">
-${count}
 </text>
 `;
 }
@@ -303,11 +303,10 @@ return Buffer.from(svg);
 }
 async function buildCharacterResultImage(characterIndex, counts, leaders) {
 const overlay = buildResultOverlaySvg(characterIndex, counts, leaders);
-const height = BADGE_HEIGHT + PHOTO_HEIGHT + SYMBOL_BAR_HEIGHT;
-const barY = BADGE_HEIGHT + PHOTO_HEIGHT;
+const height = SYMBOL_BAR_HEIGHT + BADGE_HEIGHT + PHOTO_HEIGHT;
 const cellWidth = PHOTO_WIDTH / CATEGORY_COUNT;
 const composites = [
-{ input: poll.photos[characterIndex], top: BADGE_HEIGHT, left: 0 },
+{ input: poll.photos[characterIndex], top: SYMBOL_BAR_HEIGHT + BADGE_HEIGHT, left: 0 },
 { input: overlay, top: 0, left: 0 },
 ];
 for (let option = 0; option < CATEGORY_COUNT; option++) {
@@ -316,7 +315,7 @@ if (!icon) continue;
 const centerX = cellWidth * option + cellWidth / 2;
 composites.push({
 input: icon,
-top: Math.round(barY + 14),
+top: 14,
 left: Math.round(centerX - SYMBOL_ICON_SIZE / 2),
 });
 }
@@ -477,38 +476,38 @@ components: [buildVoteButtonRow(poll.status !== "active")],
 * rows total, which would leave no room for a Confirm button
 * alongside 5 dropdowns, though with 4 there's exactly enough room.
 */
-function buildCategorySelectRow(userId, characterIndex) {
-const current = selections.get(userId) || Array(CHARACTER_COUNT).fill(null);
-const currentChoice = current[characterIndex];
+function buildCharacterSelectRow(userId, categoryIndex) {
+const current = selections.get(userId) || Array(CATEGORY_COUNT).fill(null);
+const currentChoice = current[categoryIndex];
 const usedByOthers = new Set(
-current.filter((value, index) => value !== null && index !== characterIndex)
+current.filter((value, index) => value !== null && index !== categoryIndex)
 );
-const available = poll.voteLabels
-.map((label, optionIndex) => ({ label, optionIndex }))
+const available = poll.characters
+.map((character, characterIndex) => ({ name: character.name, characterIndex }))
 .filter(
-({ optionIndex }) => !usedByOthers.has(optionIndex) || optionIndex === currentChoice
+({ characterIndex }) => !usedByOthers.has(characterIndex) || characterIndex === currentChoice
 );
-const characterName = poll.characters[characterIndex].name;
+const categoryLabel = poll.voteLabels[categoryIndex];
 const menu = new StringSelectMenuBuilder()
-.setCustomId(`choice:${characterIndex}`)
+.setCustomId(`choice:${categoryIndex}`)
 .setPlaceholder(
 currentChoice === null
-? `${truncate(characterName, 40)} — choose a category`
-: `${truncate(characterName, 30)} — ${truncate(poll.voteLabels[currentChoice], 40)}`
+? `${truncate(categoryLabel, 40)} — choose a character`
+: `${truncate(categoryLabel, 30)} — ${truncate(poll.characters[currentChoice].name, 40)}`
 )
 .addOptions(
 available.map(
-({ label, optionIndex }) =>
+({ name, characterIndex }) =>
 new StringSelectMenuOptionBuilder()
-.setLabel(truncate(label, 100))
-.setValue(String(optionIndex))
-.setDefault(currentChoice === optionIndex)
+.setLabel(truncate(name, 100))
+.setValue(String(characterIndex))
+.setDefault(currentChoice === characterIndex)
 )
 );
 return new ActionRowBuilder().addComponents(menu);
 }
 function assignedCount(userId) {
-const current = selections.get(userId) || Array(CHARACTER_COUNT).fill(null);
+const current = selections.get(userId) || Array(CATEGORY_COUNT).fill(null);
 return current.filter((value) => value !== null).length;
 }
 function buildConfirmRow(userId) {
@@ -516,31 +515,50 @@ const assigned = assignedCount(userId);
 return new ActionRowBuilder().addComponents(
 new ButtonBuilder()
 .setCustomId("confirm-vote")
-.setLabel(assigned === CHARACTER_COUNT ? "Confirm Vote ✅" : `Confirm Vote (${assigned}/${CHARACTER_COUNT} picked)`)
+.setLabel(assigned === CATEGORY_COUNT ? "Confirm Vote ✅" : `Confirm Vote (${assigned}/${CATEGORY_COUNT} picked)`)
 .setStyle(ButtonStyle.Success)
-.setDisabled(assigned !== CHARACTER_COUNT)
+.setDisabled(assigned !== CATEGORY_COUNT)
 );
 }
 function statusTextFor(userId, extra) {
 if (extra) return extra;
 const assigned = assignedCount(userId);
-if (assigned === CHARACTER_COUNT) {
+if (assigned === CATEGORY_COUNT) {
 return "All four picked. Press **Confirm Vote** below to lock it in — you can still change any dropdown first.";
 }
-return `Pick one category per character. **${assigned}/${CHARACTER_COUNT}** chosen so far.`;
+return `Pick one character per category. **${assigned}/${CATEGORY_COUNT}** chosen so far.`;
 }
 function buildVotePanel(userId, statusMessage) {
 const container = new ContainerBuilder().addTextDisplayComponents(
 new TextDisplayBuilder().setContent(statusTextFor(userId, statusMessage))
 );
-for (let index = 0; index < CHARACTER_COUNT; index++) {
-container.addActionRowComponents(buildCategorySelectRow(userId, index));
+for (let index = 0; index < CATEGORY_COUNT; index++) {
+container.addActionRowComponents(buildCharacterSelectRow(userId, index));
 }
 container.addActionRowComponents(buildConfirmRow(userId));
 return {
 components: [container],
 flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,
 };
+}
+// The in-progress `selections` Map is indexed by CATEGORY (one dropdown
+// per category, picking a character) since that's how people vote now.
+// The persisted `vote.choices` format stays indexed by CHARACTER (one
+// slot per character, holding which category it got) — unchanged so
+// getCounts/badges/symbol bar etc. don't need to know anything changed.
+function toCategoryIndexed(choices) {
+const result = Array(CATEGORY_COUNT).fill(null);
+choices.forEach((categoryIndex, characterIndex) => {
+if (categoryIndex !== null && categoryIndex !== undefined) result[categoryIndex] = characterIndex;
+});
+return result;
+}
+function toCharacterIndexed(current) {
+const result = Array(CHARACTER_COUNT).fill(null);
+current.forEach((characterIndex, categoryIndex) => {
+if (characterIndex !== null && characterIndex !== undefined) result[characterIndex] = categoryIndex;
+});
+return result;
 }
 async function openVote(interaction) {
 if (!poll || poll.status !== "active") {
@@ -553,7 +571,7 @@ if (!selections.has(interaction.user.id)) {
 const previous = votes.get(interaction.user.id);
 selections.set(
 interaction.user.id,
-previous ? [...previous.choices] : Array(CHARACTER_COUNT).fill(null)
+previous ? toCategoryIndexed(previous.choices) : Array(CATEGORY_COUNT).fill(null)
 );
 }
 return interaction.reply(buildVotePanel(interaction.user.id));
@@ -565,29 +583,29 @@ content: "This poll is closed.",
 flags: MessageFlags.Ephemeral,
 });
 }
-const characterIndex = Number(interaction.customId.split(":")[1]);
-const optionIndex = Number(interaction.values[0]);
+const categoryIndex = Number(interaction.customId.split(":")[1]);
+const characterIndex = Number(interaction.values[0]);
 if (
+categoryIndex < 0 ||
+categoryIndex >= CATEGORY_COUNT ||
 characterIndex < 0 ||
-characterIndex >= CHARACTER_COUNT ||
-optionIndex < 0 ||
-optionIndex >= CATEGORY_COUNT
+characterIndex >= CHARACTER_COUNT
 ) {
 return interaction.reply({
 content: "Invalid selection.",
 flags: MessageFlags.Ephemeral,
 });
 }
-const current = selections.get(interaction.user.id) || Array(CHARACTER_COUNT).fill(null);
-for (let index = 0; index < CHARACTER_COUNT; index++) {
-if (index !== characterIndex && current[index] === optionIndex) {
+const current = selections.get(interaction.user.id) || Array(CATEGORY_COUNT).fill(null);
+for (let index = 0; index < CATEGORY_COUNT; index++) {
+if (index !== categoryIndex && current[index] === characterIndex) {
 return interaction.reply({
-content: "That category is already assigned to another character.",
+content: "That character is already assigned to another category.",
 flags: MessageFlags.Ephemeral,
 });
 }
 }
-current[characterIndex] = optionIndex;
+current[categoryIndex] = characterIndex;
 selections.set(interaction.user.id, [...current]);
 await interaction.update(buildVotePanel(interaction.user.id));
 }
@@ -598,15 +616,16 @@ content: "This poll is closed.",
 flags: MessageFlags.Ephemeral,
 });
 }
-const current = selections.get(interaction.user.id) || Array(CHARACTER_COUNT).fill(null);
-if (assignedCount(interaction.user.id) !== CHARACTER_COUNT) {
+const current = selections.get(interaction.user.id) || Array(CATEGORY_COUNT).fill(null);
+if (assignedCount(interaction.user.id) !== CATEGORY_COUNT) {
 return interaction.reply({
-content: "Pick a category for all four characters before confirming.",
+content: "Pick a character for every category before confirming.",
 flags: MessageFlags.Ephemeral,
 });
 }
+const choices = toCharacterIndexed(current);
 votes.set(interaction.user.id, {
-choices: [...current],
+choices,
 timestamp: Date.now(),
 });
 // Acknowledge within Discord's 3-second window FIRST — updatePublicImage()
@@ -614,7 +633,7 @@ timestamp: Date.now(),
 // that window closes if done beforehand (this was causing "didn't
 // respond in time" on Confirm Vote).
 await interaction.deferUpdate();
-await saveVote(interaction.user.id, current);
+await saveVote(interaction.user.id, choices);
 await updatePublicImage();
 await saveState();
 const panel = buildVotePanel(
