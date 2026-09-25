@@ -37,8 +37,8 @@ const PORT = process.env.PORT || 3000;
 // Number of characters/pictures in a poll (each gets one image) and
 // number of voting categories (each character is assigned one of these).
 // These are independent of each other.
-const CHARACTER_COUNT = 4;
-const CATEGORY_COUNT = 4;
+const CHARACTER_COUNT = 5;
+const CATEGORY_COUNT = 5;
 const PHOTO_WIDTH = 700;
 const PHOTO_HEIGHT = 1050;
 const BADGE_HEIGHT = 120; // top: winning category name
@@ -332,14 +332,13 @@ background: "#111111",
 .toBuffer();
 }
 // All characters are stitched into ONE image and sent as a single
-// attachment, arranged as a neat 2-wide grid, rather than sent as
+// attachment, arranged in a single horizontal row, rather than sent as
 // separate attachments — Discord's own client auto-arranges multiple
 // attachments into its own grid (shrinking each one further to fit),
 // which is what used to split/duplicate the poll unpredictably. Also,
 // Discord caps how wide it will ever display an attached image in a
-// message regardless of the file's actual resolution, so a single
-// long row of panels always renders tiny — a 2-wide grid instead
-// means each panel gets a much bigger share of that same fixed width.
+// message regardless of the file's actual resolution, so panels are
+// still legible once Discord scales the whole row down to fit.
 async function buildCombinedResultImage() {
 const counts = getCounts();
 const leaders = getCharacterLeaders(counts);
@@ -349,7 +348,7 @@ for (let i = 0; i < CHARACTER_COUNT; i++) {
 panels.push(await buildCharacterResultImage(i, counts, leaders));
 }
 const panelHeight = BADGE_HEIGHT + PHOTO_HEIGHT + SYMBOL_BAR_HEIGHT;
-const COLUMNS = 2;
+const COLUMNS = CHARACTER_COUNT;
 const rowCount = Math.ceil(panels.length / COLUMNS);
 const canvasWidth = PHOTO_WIDTH * COLUMNS;
 const composites = panels.map((buffer, index) => {
