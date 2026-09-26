@@ -1191,6 +1191,7 @@ flags: MessageFlags.Ephemeral,
 */
 http
 .createServer((req, res) => {
+console.log(`Health check ping received (${req.method} ${req.url})`);
 res.writeHead(200, { "Content-Type": "text/plain" });
 res.end("MayorBot is running.");
 })
