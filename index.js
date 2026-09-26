@@ -236,18 +236,19 @@ function getCharacterLeaders(counts) {
 const leaders = [];
 for (let character = 0; character < CHARACTER_COUNT; character++) {
 let highest = 0;
-const winningOptions = [];
+let winningOption = null;
 for (let option = 0; option < CATEGORY_COUNT; option++) {
 const count = counts[option][character];
 if (count > highest) {
 highest = count;
-winningOptions.length = 0;
-winningOptions.push(option);
-} else if (count > 0 && count === highest) {
-winningOptions.push(option);
+winningOption = option;
 }
 }
-leaders.push(winningOptions);
+// On a tie, this keeps whichever option reached the top count first
+// (the lowest option index) rather than showing every tied option as
+// its own badge — every panel always shows exactly one result, same
+// as a panel with a clear winner.
+leaders.push(winningOption === null ? [] : [winningOption]);
 }
 return leaders;
 }
@@ -721,7 +722,14 @@ votes.set(vote.userId, vote);
 }
 } catch {}
 }
+console.log(
+`Restored poll "${poll.title}" (${poll.id}): ${messages.length} data messages scanned, ${votes.size} vote(s) recovered.`
+);
+try {
 await updatePublicImage();
+} catch (error) {
+console.error("Could not refresh the public poll image on restart:", error);
+}
 scheduleClose();
 }
 /*
@@ -1137,15 +1145,33 @@ processingInteractions.delete(interaction.id);
 return;
 }
 if (interaction.isButton() && interaction.customId === "vote") {
+if (processingInteractions.has(interaction.id)) return;
+processingInteractions.add(interaction.id);
+try {
 await openVote(interaction);
+} finally {
+processingInteractions.delete(interaction.id);
+}
 return;
 }
 if (interaction.isButton() && interaction.customId === "confirm-vote") {
+if (processingInteractions.has(interaction.id)) return;
+processingInteractions.add(interaction.id);
+try {
 await confirmVote(interaction);
+} finally {
+processingInteractions.delete(interaction.id);
+}
 return;
 }
 if (interaction.isStringSelectMenu() && interaction.customId.startsWith("choice:")) {
+if (processingInteractions.has(interaction.id)) return;
+processingInteractions.add(interaction.id);
+try {
 await handleChoice(interaction);
+} finally {
+processingInteractions.delete(interaction.id);
+}
 return;
 }
 } catch (error) {
@@ -1169,6 +1195,34 @@ res.writeHead(200, { "Content-Type": "text/plain" });
 res.end("MayorBot is running.");
 })
 .listen(PORT, () => console.log(`Web server listening on ${PORT}`));
+/*
+* KEEP-ALIVE
+*
+* Render's free Web Services spin down after ~15 minutes with no
+* incoming HTTP request to the service's public URL. Discord's
+* gateway connection (how this bot gets votes) doesn't count as HTTP
+* traffic to Render, so a poll can be sitting there getting clicks
+* while the process itself quietly goes to sleep and stops
+* responding to any of them — no crash, no error, nothing to log.
+*
+* This is a best-effort fallback: it only works if this process is
+* still awake to run it. A free external uptime monitor (UptimeRobot,
+* cron-job.org, etc.) pinging the same URL is more reliable, since it
+* keeps working even if this self-ping is what's asleep.
+*/
+const SELF_PING_URL = process.env.RENDER_EXTERNAL_URL;
+if (SELF_PING_URL) {
+setInterval(() => {
+fetch(SELF_PING_URL).catch((error) =>
+console.error("Self-ping failed:", error.message)
+);
+}, 10 * 60 * 1000); // well under the 15-minute sleep window
+console.log(`Self-ping keep-alive enabled for ${SELF_PING_URL}`);
+} else {
+console.log(
+"RENDER_EXTERNAL_URL not set — self-ping keep-alive is disabled. Set up an external uptime monitor to prevent the service from sleeping."
+);
+}
 /*
 * LOGIN
 */
