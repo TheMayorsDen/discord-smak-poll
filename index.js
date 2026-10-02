@@ -19,6 +19,7 @@ MessageFlags,
 ContainerBuilder,
 TextDisplayBuilder,
 ChannelType,
+EmbedBuilder,
 } = require("discord.js");
 const sharp = require("sharp");
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -34,11 +35,6 @@ const PORT = process.env.PORT || 3000;
 * in a message as a grid, and each one renders much
 * larger than a slice of one super-wide image would.
 */
-// Number of characters/pictures in a poll (each gets one image) and
-// number of voting categories (each character is assigned one of these).
-// These are independent of each other.
-const CHARACTER_COUNT = 5;
-const CATEGORY_COUNT = 5;
 const PHOTO_WIDTH = 700;
 const PHOTO_HEIGHT = 1050;
 const BADGE_HEIGHT = 120; // top: winning category name
@@ -100,22 +96,6 @@ if (!response.ok) {
 throw new Error(`Image download failed: ${response.status}`);
 }
 return Buffer.from(await response.arrayBuffer());
-}
-// Uploaded character PNGs often have a different amount of empty
-// transparent margin baked in around the subject, which is why they
-// used to come out looking like different sizes even though every
-// panel is the same fixed box. Trimming that margin off first means
-// each character is scaled up to fill the box as much as possible,
-// so they all read as roughly the same size. Trim can fail on an
-// image with nothing to trim (e.g. a subject that already touches
-// every edge), so any failure just falls back to the original.
-async function trimTransparentMargins(buffer) {
-try {
-return await sharp(buffer).trim().toBuffer();
-} catch (error) {
-console.error("Could not trim image margins, using original:", error.message);
-return buffer;
-}
 }
 /*
  * SYMBOL IMAGES
@@ -220,12 +200,12 @@ return messages;
 * that category for that character.
 */
 function getCounts() {
-const counts = Array.from({ length: CATEGORY_COUNT }, () => Array(CHARACTER_COUNT).fill(0));
+const counts = Array.from({ length: 5 }, () => Array(5).fill(0));
 for (const vote of votes.values()) {
 if (!vote.choices) continue;
-for (let character = 0; character < CHARACTER_COUNT; character++) {
+for (let character = 0; character < 5; character++) {
 const option = vote.choices[character];
-if (option >= 0 && option < CATEGORY_COUNT) {
+if (option >= 0 && option < 5) {
 counts[option][character]++;
 }
 }
@@ -234,58 +214,67 @@ return counts;
 }
 function getCharacterLeaders(counts) {
 const leaders = [];
-for (let character = 0; character < CHARACTER_COUNT; character++) {
+for (let character = 0; character < 5; character++) {
 let highest = 0;
-let winningOption = null;
-for (let option = 0; option < CATEGORY_COUNT; option++) {
+const winningOptions = [];
+for (let option = 0; option < 5; option++) {
 const count = counts[option][character];
 if (count > highest) {
 highest = count;
-winningOption = option;
+winningOptions.length = 0;
+winningOptions.push(option);
+} else if (count > 0 && count === highest) {
+winningOptions.push(option);
 }
 }
-// On a tie, this keeps whichever option reached the top count first
-// (the lowest option index) rather than showing every tied option as
-// its own badge — every panel always shows exactly one result, same
-// as a panel with a clear winner.
-leaders.push(winningOption === null ? [] : [winningOption]);
+leaders.push(winningOptions);
 }
 return leaders;
+}
+/*
+* RESULTS EMBED
+*
+* A clean, text-based summary shown once the poll closes, separate
+* from the character image grid (which stays exactly as-is while
+* voting is active). Real Discord text/embeds render emoji natively,
+* so no font or image workaround is needed here at all.
+*/
+function buildResultsEmbed(counts, leaders) {
+const embed = new EmbedBuilder()
+.setTitle("🏆 Results")
+.setColor(0x7c3aed);
+for (let character = 0; character < 5; character++) {
+const winningOptions = leaders[character];
+const name = poll.characters[character].name;
+const headline =
+winningOptions.length === 0
+? "No votes"
+: winningOptions.map((option) => poll.resultLabels[option]).join(" / ");
+const tallyLine = poll.symbols
+.map((symbol, option) => `${cleanSymbol(symbol)} \`${counts[option][character]}\``)
+.join("  ");
+embed.addFields({
+name: `${name} — ${headline}`,
+value: tallyLine,
+});
+}
+return embed;
 }
 /*
 * IMAGE BUILDING
 *
 * Each character gets one tall image:
-* [ symbols + vote counts ]
-* [ photo ]
 * [ winning category badge(s) ]
+* [ photo ]
+* [ symbols + vote counts ]
 */
 function buildResultOverlaySvg(characterIndex, counts, leaders) {
 const width = PHOTO_WIDTH;
-const height = SYMBOL_BAR_HEIGHT + BADGE_HEIGHT + PHOTO_HEIGHT;
+const height = BADGE_HEIGHT + PHOTO_HEIGHT + SYMBOL_BAR_HEIGHT;
 const winningOptions = leaders[characterIndex] || [];
 let svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">`;
-// Top: symbol bar — this character's vote count per category. The
-// symbol icon itself is drawn separately as a real image (see
-// buildCharacterResultImage) — text-based emoji rendering is
-// unreliable on headless servers. This just draws the counts,
-// positioned below where each icon sits.
-svg += `<rect x="0" y="0" width="${width}" height="${SYMBOL_BAR_HEIGHT}" fill="#111111"/>`;
-const cellWidth = width / CATEGORY_COUNT;
-for (let option = 0; option < CATEGORY_COUNT; option++) {
-const count = counts[option][characterIndex];
-const centerX = cellWidth * option + cellWidth / 2;
-svg += `
-<text x="${centerX}" y="${SYMBOL_BAR_HEIGHT / 2 + 34}"
-text-anchor="middle" dominant-baseline="middle" fill="white"
-font-family="Arial, sans-serif" font-size="26px" font-weight="700">
-${count}
-</text>
-`;
-}
-// Below the photo: winning-category badge area
-const badgeY = SYMBOL_BAR_HEIGHT + PHOTO_HEIGHT;
-svg += `<rect x="0" y="${badgeY}" width="${width}" height="${BADGE_HEIGHT}" fill="#111111"/>`;
+// Top badge area
+svg += `<rect x="0" y="0" width="${width}" height="${BADGE_HEIGHT}" fill="#111111"/>`;
 if (winningOptions.length) {
 const gap = 8;
 const badgeWidth =
@@ -297,9 +286,9 @@ const count = counts[option][characterIndex];
 const labelWithCount = `${label} (${count})`;
 const fontSize = textSize(labelWithCount, badgeWidth);
 svg += `
-<rect x="${x}" y="${badgeY + 14}" width="${badgeWidth}" height="${BADGE_HEIGHT - 28}"
+<rect x="${x}" y="14" width="${badgeWidth}" height="${BADGE_HEIGHT - 28}"
 rx="16" fill="#242424" stroke="#ffffff" stroke-width="2"/>
-<text x="${x + badgeWidth / 2}" y="${badgeY + BADGE_HEIGHT / 2}"
+<text x="${x + badgeWidth / 2}" y="${BADGE_HEIGHT / 2}"
 text-anchor="middle" dominant-baseline="middle" fill="white"
 font-family="Arial, sans-serif" font-size="${fontSize}px" font-weight="700">
 ${escapeSvg(truncate(labelWithCount, 35))}
@@ -308,10 +297,29 @@ ${escapeSvg(truncate(labelWithCount, 35))}
 });
 } else {
 svg += `
-<text x="${width / 2}" y="${badgeY + BADGE_HEIGHT / 2}" text-anchor="middle"
+<text x="${width / 2}" y="${BADGE_HEIGHT / 2}" text-anchor="middle"
 dominant-baseline="middle" fill="#777777" font-family="Arial, sans-serif"
 font-size="20px">
 No votes yet
+</text>
+`;
+}
+// Bottom symbol bar — this character's votes per category
+const barY = BADGE_HEIGHT + PHOTO_HEIGHT;
+svg += `<rect x="0" y="${barY}" width="${width}" height="${SYMBOL_BAR_HEIGHT}" fill="#111111"/>`;
+const cellWidth = width / 5;
+for (let option = 0; option < 5; option++) {
+const count = counts[option][characterIndex];
+const centerX = cellWidth * option + cellWidth / 2;
+// The symbol itself is drawn separately as a real image (see
+// buildCharacterResultImage) — text-based emoji rendering is
+// unreliable on headless servers. This just draws the count,
+// positioned below where that image sits.
+svg += `
+<text x="${centerX}" y="${barY + SYMBOL_BAR_HEIGHT / 2 + 34}"
+text-anchor="middle" dominant-baseline="middle" fill="white"
+font-family="Arial, sans-serif" font-size="26px" font-weight="700">
+${count}
 </text>
 `;
 }
@@ -320,19 +328,20 @@ return Buffer.from(svg);
 }
 async function buildCharacterResultImage(characterIndex, counts, leaders) {
 const overlay = buildResultOverlaySvg(characterIndex, counts, leaders);
-const height = SYMBOL_BAR_HEIGHT + BADGE_HEIGHT + PHOTO_HEIGHT;
-const cellWidth = PHOTO_WIDTH / CATEGORY_COUNT;
+const height = BADGE_HEIGHT + PHOTO_HEIGHT + SYMBOL_BAR_HEIGHT;
+const barY = BADGE_HEIGHT + PHOTO_HEIGHT;
+const cellWidth = PHOTO_WIDTH / 5;
 const composites = [
-{ input: poll.photos[characterIndex], top: SYMBOL_BAR_HEIGHT, left: 0 },
+{ input: poll.photos[characterIndex], top: BADGE_HEIGHT, left: 0 },
 { input: overlay, top: 0, left: 0 },
 ];
-for (let option = 0; option < CATEGORY_COUNT; option++) {
+for (let option = 0; option < 5; option++) {
 const icon = poll.symbolImages && poll.symbolImages[option];
 if (!icon) continue;
 const centerX = cellWidth * option + cellWidth / 2;
 composites.push({
 input: icon,
-top: 14,
+top: Math.round(barY + 14),
 left: Math.round(centerX - SYMBOL_ICON_SIZE / 2),
 });
 }
@@ -348,46 +357,35 @@ background: "#111111",
 .jpeg({ quality: 92 })
 .toBuffer();
 }
-// All characters are stitched into ONE image and sent as a single
-// attachment, arranged in a single horizontal row, rather than sent as
-// separate attachments — Discord's own client auto-arranges multiple
-// attachments into its own grid (shrinking each one further to fit),
-// which is what used to split/duplicate the poll unpredictably. Also,
-// Discord caps how wide it will ever display an attached image in a
-// message regardless of the file's actual resolution, so panels are
-// still legible once Discord scales the whole row down to fit.
+// All 5 characters are stitched into ONE image and sent as a single
+// attachment. Sending 5 separate attachments lets Discord's own client
+// auto-arrange them into a multi-row grid (and shrink each one further
+// to fit), which is what was splitting the poll across two rows. One
+// wide image guarantees a single row every time.
 async function buildCombinedResultImage() {
 const counts = getCounts();
 const leaders = getCharacterLeaders(counts);
 poll.characterLeaders = leaders;
 const panels = [];
-for (let i = 0; i < CHARACTER_COUNT; i++) {
+for (let i = 0; i < 5; i++) {
 panels.push(await buildCharacterResultImage(i, counts, leaders));
 }
 const panelHeight = BADGE_HEIGHT + PHOTO_HEIGHT + SYMBOL_BAR_HEIGHT;
-const COLUMNS = CHARACTER_COUNT;
-const rowCount = Math.ceil(panels.length / COLUMNS);
-const canvasWidth = PHOTO_WIDTH * COLUMNS;
-const composites = panels.map((buffer, index) => {
-const row = Math.floor(index / COLUMNS);
-const col = index % COLUMNS;
-const panelsInThisRow = Math.min(COLUMNS, panels.length - row * COLUMNS);
-const rowOffset = (canvasWidth - PHOTO_WIDTH * panelsInThisRow) / 2;
-return {
-input: buffer,
-left: Math.round(rowOffset + col * PHOTO_WIDTH),
-top: row * panelHeight,
-};
-});
 return await sharp({
 create: {
-width: canvasWidth,
-height: panelHeight * rowCount,
+width: PHOTO_WIDTH * 5,
+height: panelHeight,
 channels: 3,
 background: "#111111",
 },
 })
-.composite(composites)
+.composite(
+panels.map((buffer, index) => ({
+input: buffer,
+left: index * PHOTO_WIDTH,
+top: 0,
+}))
+)
 .jpeg({ quality: 90 })
 .toBuffer();
 }
@@ -429,7 +427,6 @@ await old.delete();
 const state = {
 schemaVersion: SCHEMA_VERSION,
 pollId: poll.id,
-title: poll.title,
 duration: poll.duration,
 startTime: poll.startTime,
 endTime: poll.endTime,
@@ -449,7 +446,7 @@ stateMessageId = message.id;
 /*
 * PUBLIC MESSAGE
 *
-* Just the 4 photos + one "Vote / Change Vote" button.
+* Just the 5 photos + one "Vote / Change Vote" button.
 */
 function buildVoteButtonRow(disabled = false) {
 return new ActionRowBuilder().addComponents(
@@ -460,40 +457,34 @@ new ButtonBuilder()
 .setDisabled(disabled)
 );
 }
-function buildConfirmPublishRow(channelName) {
-return new ActionRowBuilder().addComponents(
-new ButtonBuilder()
-.setCustomId("publish-poll")
-.setLabel(`Publish to #${channelName}`.slice(0, 80))
-.setStyle(ButtonStyle.Success)
-);
-}
 async function updatePublicImage() {
 if (!poll || !publicPollMessage) return;
 const combined = await buildCombinedResultImage();
+const closed = poll.status !== "active";
+const embeds = closed
+? [buildResultsEmbed(getCounts(), poll.characterLeaders)]
+: [];
 await publicPollMessage.edit({
-content:
-poll.status === "active"
-? `**${poll.title}**`
-: `**${poll.title}**\n\n🔒 Poll closed — thanks for voting!`,
+content: closed ? "🔒 Poll closed — thanks for voting!" : null,
 attachments: [],
 files: [new AttachmentBuilder(combined, { name: "poll-results.jpg" })],
-components: [buildVoteButtonRow(poll.status !== "active")],
+embeds,
+components: [buildVoteButtonRow(closed)],
 });
 }
 /*
 * PRIVATE VOTE PANEL
 *
-* All 4 dropdowns shown together, one per character, plus a
+* All 5 dropdowns shown together, one per character, plus a
 * Confirm Vote button. Nothing is saved until Confirm is pressed
-* (and the button stays disabled until all 4 are picked). Built
+* (and the button stays disabled until all 5 are picked). Built
 * with Components V2 so the dropdowns + button + status text can
 * all sit in one panel — classic components cap out at 5 action
-* rows total, which would leave no room for a Confirm button
-* alongside 5 dropdowns, though with 4 there's exactly enough room.
+* rows total, which the 5 dropdowns alone would already use up,
+* leaving no room for a Confirm button.
 */
 function buildCategorySelectRow(userId, characterIndex) {
-const current = selections.get(userId) || Array(CHARACTER_COUNT).fill(null);
+const current = selections.get(userId) || Array(5).fill(null);
 const currentChoice = current[characterIndex];
 const usedByOthers = new Set(
 current.filter((value, index) => value !== null && index !== characterIndex)
@@ -523,7 +514,7 @@ new StringSelectMenuOptionBuilder()
 return new ActionRowBuilder().addComponents(menu);
 }
 function assignedCount(userId) {
-const current = selections.get(userId) || Array(CHARACTER_COUNT).fill(null);
+const current = selections.get(userId) || Array(5).fill(null);
 return current.filter((value) => value !== null).length;
 }
 function buildConfirmRow(userId) {
@@ -531,24 +522,24 @@ const assigned = assignedCount(userId);
 return new ActionRowBuilder().addComponents(
 new ButtonBuilder()
 .setCustomId("confirm-vote")
-.setLabel(assigned === CHARACTER_COUNT ? "Confirm Vote ✅" : `Confirm Vote (${assigned}/${CHARACTER_COUNT} picked)`)
+.setLabel(assigned === 5 ? "Confirm Vote ✅" : `Confirm Vote (${assigned}/5 picked)`)
 .setStyle(ButtonStyle.Success)
-.setDisabled(assigned !== CHARACTER_COUNT)
+.setDisabled(assigned !== 5)
 );
 }
 function statusTextFor(userId, extra) {
 if (extra) return extra;
 const assigned = assignedCount(userId);
-if (assigned === CHARACTER_COUNT) {
-return "All four picked. Press **Confirm Vote** below to lock it in — you can still change any dropdown first.";
+if (assigned === 5) {
+return "All five picked. Press **Confirm Vote** below to lock it in — you can still change any dropdown first.";
 }
-return `Pick one category per character. **${assigned}/${CHARACTER_COUNT}** chosen so far.`;
+return `Pick one category per character. **${assigned}/5** chosen so far.`;
 }
 function buildVotePanel(userId, statusMessage) {
 const container = new ContainerBuilder().addTextDisplayComponents(
 new TextDisplayBuilder().setContent(statusTextFor(userId, statusMessage))
 );
-for (let index = 0; index < CHARACTER_COUNT; index++) {
+for (let index = 0; index < 5; index++) {
 container.addActionRowComponents(buildCategorySelectRow(userId, index));
 }
 container.addActionRowComponents(buildConfirmRow(userId));
@@ -568,7 +559,7 @@ if (!selections.has(interaction.user.id)) {
 const previous = votes.get(interaction.user.id);
 selections.set(
 interaction.user.id,
-previous ? [...previous.choices] : Array(CHARACTER_COUNT).fill(null)
+previous ? [...previous.choices] : Array(5).fill(null)
 );
 }
 return interaction.reply(buildVotePanel(interaction.user.id));
@@ -584,17 +575,17 @@ const characterIndex = Number(interaction.customId.split(":")[1]);
 const optionIndex = Number(interaction.values[0]);
 if (
 characterIndex < 0 ||
-characterIndex >= CHARACTER_COUNT ||
+characterIndex >= 5 ||
 optionIndex < 0 ||
-optionIndex >= CATEGORY_COUNT
+optionIndex >= 5
 ) {
 return interaction.reply({
 content: "Invalid selection.",
 flags: MessageFlags.Ephemeral,
 });
 }
-const current = selections.get(interaction.user.id) || Array(CHARACTER_COUNT).fill(null);
-for (let index = 0; index < CHARACTER_COUNT; index++) {
+const current = selections.get(interaction.user.id) || Array(5).fill(null);
+for (let index = 0; index < 5; index++) {
 if (index !== characterIndex && current[index] === optionIndex) {
 return interaction.reply({
 content: "That category is already assigned to another character.",
@@ -613,10 +604,10 @@ content: "This poll is closed.",
 flags: MessageFlags.Ephemeral,
 });
 }
-const current = selections.get(interaction.user.id) || Array(CHARACTER_COUNT).fill(null);
-if (assignedCount(interaction.user.id) !== CHARACTER_COUNT) {
+const current = selections.get(interaction.user.id) || Array(5).fill(null);
+if (assignedCount(interaction.user.id) !== 5) {
 return interaction.reply({
-content: "Pick a category for all four characters before confirming.",
+content: "Pick a category for all five characters before confirming.",
 flags: MessageFlags.Ephemeral,
 });
 }
@@ -691,8 +682,8 @@ const baseMessage = await dataChannel.messages.fetch(saved.baseImageMessageId);
 const attachments = [...baseMessage.attachments.values()].sort((a, b) =>
 a.name.localeCompare(b.name)
 );
-if (attachments.length !== CHARACTER_COUNT) {
-throw new Error(`Expected ${CHARACTER_COUNT} base images.`);
+if (attachments.length !== 5) {
+throw new Error("Expected 5 base images.");
 }
 poll.photos = await Promise.all(attachments.map((a) => downloadBuffer(a.url)));
 } catch (error) {
@@ -722,14 +713,7 @@ votes.set(vote.userId, vote);
 }
 } catch {}
 }
-console.log(
-`Restored poll "${poll.title}" (${poll.id}): ${messages.length} data messages scanned, ${votes.size} vote(s) recovered.`
-);
-try {
 await updatePublicImage();
-} catch (error) {
-console.error("Could not refresh the public poll image on restart:", error);
-}
 scheduleClose();
 }
 /*
@@ -737,26 +721,23 @@ scheduleClose();
 * /poll command: images + names, then a modal for categories.
 */
 async function startPollSetup(interaction) {
-if (poll && poll.status !== "closed") {
+if (poll && poll.status === "active") {
 return interaction.reply({
-content:
-poll.status === "draft"
-? "There's already a drafted poll waiting to be published (or discarded with `/endpoll`)."
-: "There is already an active poll. Use `/endpoll` first.",
+content: "There is already an active poll. Use `/endpoll` first.",
 flags: MessageFlags.Ephemeral,
 });
 }
-const draftChannelId = interaction.channel.id;
-const targetChannel = interaction.options.getChannel("channel");
+const targetChannel = interaction.options.getChannel("channel") || interaction.channel;
 if (targetChannel.id === POLL_DATA_CHANNEL_ID) {
 return interaction.reply({
-content: "That's the bot's private data channel — pick a different channel to publish to.",
+content:
+"That's the bot's private data channel (used to store poll info behind the scenes) — polls can't be posted there. Pick a different channel with the `channel` option, or run `/poll` from the channel you want it in.",
 flags: MessageFlags.Ephemeral,
 });
 }
 const duration = interaction.options.getString("duration");
 const characters = [];
-for (let i = 1; i <= CHARACTER_COUNT; i++) {
+for (let i = 1; i <= 5; i++) {
 const image = interaction.options.getAttachment(`image${i}`);
 const name = clean(interaction.options.getString(`name${i}`));
 if (!image) {
@@ -773,22 +754,12 @@ flags: MessageFlags.Ephemeral,
 }
 characters.push({ name, url: image.url });
 }
-const title = clean(interaction.options.getString("title"));
-if (!title) {
-return interaction.reply({
-content: "The poll title can't be empty.",
-flags: MessageFlags.Ephemeral,
-});
-}
 const setupId = makeId();
 pendingSetups.set(interaction.user.id, {
 setupId,
-title,
 duration,
 characters,
-draftChannelId,
-targetChannelId: targetChannel.id,
-targetChannelName: targetChannel.name,
+channelId: targetChannel.id,
 });
 setTimeout(() => {
 const pending = pendingSetups.get(interaction.user.id);
@@ -798,15 +769,15 @@ pendingSetups.delete(interaction.user.id);
 }, 10 * 60 * 1000);
 const modal = new ModalBuilder()
 .setCustomId("poll-categories")
-.setTitle("Voting categories");
-for (let i = 1; i <= CATEGORY_COUNT; i++) {
+.setTitle("Voting categories (up to 5)");
+for (let i = 1; i <= 5; i++) {
 modal.addComponents(
 new ActionRowBuilder().addComponents(
 new TextInputBuilder()
 .setCustomId(`cat${i}`)
-.setLabel(`Category ${i}: symbol | category name | result?`)
+.setLabel(`Category ${i}: symbol | label | result?`)
 .setStyle(TextInputStyle.Short)
-.setPlaceholder("?? | Marriage | Wedded")
+.setPlaceholder("💍 | Marriage | Wedded")
 .setRequired(true)
 .setMaxLength(80)
 )
@@ -827,7 +798,7 @@ flags: MessageFlags.Ephemeral,
 });
 }
 pendingSetups.delete(interaction.user.id);
-if (poll && poll.status !== "closed") {
+if (poll && poll.status === "active") {
 return interaction.reply({
 content: "Someone already started a poll first. Use `/endpoll` then try again.",
 flags: MessageFlags.Ephemeral,
@@ -855,11 +826,10 @@ return interaction.editReply(
 } catch (error) {
 console.error("Duplicate-poll safety check failed (continuing anyway):", error);
 }
-const title = pending.title;
 const symbols = [];
 const voteLabels = [];
 const resultLabels = [];
-for (let i = 1; i <= CATEGORY_COUNT; i++) {
+for (let i = 1; i <= 5; i++) {
 const raw = clean(interaction.fields.getTextInputValue(`cat${i}`));
 const parts = raw.split("|").map((part) => part.trim());
 const symbol = cleanSymbol(parts[0]);
@@ -867,29 +837,23 @@ const vote = clean(parts[1]);
 const result = clean(parts[2]);
 if (!symbol || !vote) {
 return interaction.editReply(
-`Category ${i} needs a symbol and a category name separated by "|", e.g. ?? | Marriage`
+`Category ${i} needs a symbol and a label separated by "|", e.g. 💍 | Marriage`
 );
 }
 symbols.push(symbol);
 voteLabels.push(vote);
 resultLabels.push(result || vote);
 }
-if (new Set(voteLabels.map((v) => v.toLowerCase())).size !== CATEGORY_COUNT) {
-return interaction.editReply("The four category names must all be different.");
+if (new Set(voteLabels.map((v) => v.toLowerCase())).size !== 5) {
+return interaction.editReply("The five category labels must all be different.");
 }
 const durationDays = { "1d": 1, "3d": 3, "7d": 7, "14d": 14 }[pending.duration];
 const photos = [];
 try {
 for (const character of pending.characters) {
 const raw = await downloadBuffer(character.url);
-const trimmed = await trimTransparentMargins(raw);
-const resized = await sharp(trimmed)
-.resize(PHOTO_WIDTH, PHOTO_HEIGHT, {
-fit: "contain",
-position: "centre",
-background: "#111111",
-})
-.flatten({ background: "#111111" })
+const resized = await sharp(raw)
+.resize(PHOTO_WIDTH, PHOTO_HEIGHT, { fit: "cover", position: "centre" })
 .jpeg({ quality: 92 })
 .toBuffer();
 photos.push(resized);
@@ -900,13 +864,10 @@ return interaction.editReply(`I couldn't process one of the images: ${error.mess
 const symbolImages = await buildSymbolImages(symbols);
 poll = {
 id: makeId(),
-title,
 duration: durationDays,
-startTime: null,
-endTime: null,
-draftChannelId: pending.draftChannelId,
-draftMessageId: null,
-publicChannelId: pending.targetChannelId,
+startTime: Date.now(),
+endTime: Date.now() + durationDays * 24 * 60 * 60 * 1000,
+publicChannelId: pending.channelId,
 publicMessageId: null,
 baseImageMessageId: null,
 characters: pending.characters.map((character) => ({ name: character.name })),
@@ -915,24 +876,22 @@ voteLabels,
 symbols,
 symbolImages,
 resultLabels,
-characterLeaders: Array.from({ length: CHARACTER_COUNT }, () => []),
-status: "draft",
+characterLeaders: [[], [], [], [], []],
+status: "active",
 };
 votes = new Map();
 selections = new Map();
 try {
 await saveBaseImages();
 const combined = await buildCombinedResultImage();
-const draftChannel = await client.channels.fetch(pending.draftChannelId);
-const draftMessage = await draftChannel.send({
-content:
-`**${title}**\n\n` +
-`📝 **Draft poll — preview only, nobody can vote on this yet.** ` +
-`Press the button below when you're happy with it to publish to <#${pending.targetChannelId}>, or run \`/endpoll\` to discard it.`,
+const channel = await client.channels.fetch(pending.channelId);
+publicPollMessage = await channel.send({
 files: [new AttachmentBuilder(combined, { name: "poll-results.jpg" })],
-components: [buildConfirmPublishRow(pending.targetChannelName)],
+components: [buildVoteButtonRow()],
 });
-poll.draftMessageId = draftMessage.id;
+poll.publicMessageId = publicPollMessage.id;
+await saveState();
+scheduleClose();
 await interaction.deleteReply();
 } catch (error) {
 console.error(error);
@@ -941,76 +900,12 @@ await interaction.editReply(`Something went wrong: ${error.message}`);
 }
 }
 /*
-* SETUP FLOW — PART 3
-* "Publish" button on the draft preview: moves the drafted poll into
-* the channel chosen back at /poll time, adds the vote button, and starts the countdown timer.
-*/
-async function publishPoll(interaction) {
-if (!poll || poll.status !== "draft") {
-return interaction.reply({
-content: "There's no drafted poll waiting to be published — run `/poll` first.",
-flags: MessageFlags.Ephemeral,
-});
-}
-if (!interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
-return interaction.reply({
-content: "You don't have permission to publish this poll.",
-flags: MessageFlags.Ephemeral,
-});
-}
-let targetChannel;
-try {
-targetChannel = await client.channels.fetch(poll.publicChannelId);
-} catch (error) {
-return interaction.reply({
-content: `Couldn't find the channel this was set to publish to: ${error.message}`,
-flags: MessageFlags.Ephemeral,
-});
-}
-await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-try {
-const combined = await buildCombinedResultImage();
-publicPollMessage = await targetChannel.send({
-content: `**${poll.title}**`,
-files: [new AttachmentBuilder(combined, { name: "poll-results.jpg" })],
-components: [buildVoteButtonRow()],
-});
-poll.startTime = Date.now();
-poll.endTime = Date.now() + poll.duration * 24 * 60 * 60 * 1000;
-poll.publicMessageId = publicPollMessage.id;
-poll.status = "active";
-await saveState();
-scheduleClose();
-try {
-const draftChannel = await client.channels.fetch(poll.draftChannelId);
-const draftMessage = await draftChannel.messages.fetch(poll.draftMessageId);
-await draftMessage.edit({
-content: `✅ **Published to <#${targetChannel.id}>** — voting is now open there.`,
-components: [],
-});
-} catch (error) {
-console.error("Could not update the draft preview message:", error.message);
-}
-await interaction.editReply(`✅ Poll published to <#${targetChannel.id}>. Voting is now open.`);
-} catch (error) {
-console.error(error);
-await interaction.editReply(`Something went wrong publishing the poll: ${error.message}`);
-}
-}
-/*
 * SLASH COMMANDS
 */
 const pollCommand = new SlashCommandBuilder()
 .setName("poll")
-.setDescription("Create a four-character poll")
+.setDescription("Create a five-character poll")
 .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-.addStringOption((option) =>
-option
-.setName("title")
-.setDescription("Poll title (shown at the top when published)")
-.setRequired(true)
-.setMaxLength(100)
-)
 .addStringOption((option) =>
 option
 .setName("duration")
@@ -1022,24 +917,24 @@ option
 { name: "7 days", value: "7d" },
 { name: "14 days", value: "14d" }
 )
+)
+.addChannelOption((option) =>
+option
+.setName("channel")
+.setDescription("Where to post the finished poll (defaults to this channel)")
+.addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+.setRequired(false)
 );
-for (let i = 1; i <= CHARACTER_COUNT; i++) {
+for (let i = 1; i <= 5; i++) {
 pollCommand.addAttachmentOption((option) =>
 option.setName(`image${i}`).setDescription(`Picture ${i}`).setRequired(true)
 );
 }
-for (let i = 1; i <= CHARACTER_COUNT; i++) {
+for (let i = 1; i <= 5; i++) {
 pollCommand.addStringOption((option) =>
 option.setName(`name${i}`).setDescription(`Character ${i} name`).setRequired(true)
 );
 }
-pollCommand.addChannelOption((option) =>
-option
-.setName("channel")
-.setDescription("Where to publish the poll once you confirm the draft")
-.addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
-.setRequired(true)
-);
 const endPollCommand = new SlashCommandBuilder()
 .setName("endpoll")
 .setDescription("End the current poll")
@@ -1096,29 +991,16 @@ processingInteractions.delete(interaction.id);
 return;
 }
 if (interaction.commandName === "endpoll") {
-if (!poll || poll.status === "closed") {
+if (!poll || poll.status !== "active") {
 return interaction.reply({
-content: "There is no poll in progress.",
+content: "There is no active poll.",
 flags: MessageFlags.Ephemeral,
 });
-}
-await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-if (poll.status === "draft") {
-try {
-const draftChannel = await client.channels.fetch(poll.draftChannelId);
-const draftMessage = await draftChannel.messages.fetch(poll.draftMessageId);
-await draftMessage.edit({ content: "🗑️ **Draft discarded.**", components: [] });
-} catch (error) {
-console.error("Could not update the discarded draft message:", error.message);
-}
-poll = null;
-votes = new Map();
-selections = new Map();
-return interaction.editReply({ content: "Draft discarded." });
 }
 // Acknowledge within Discord's 3-second window FIRST — closePoll()
 // rebuilds the result image and saves state, which is too slow to
 // finish before that window closes if done beforehand.
+await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 await closePoll();
 return interaction.editReply({ content: "Poll ended." });
 }
@@ -1134,44 +1016,16 @@ processingInteractions.delete(interaction.id);
 }
 return;
 }
-if (interaction.isButton() && interaction.customId === "publish-poll") {
-if (processingInteractions.has(interaction.id)) return;
-processingInteractions.add(interaction.id);
-try {
-await publishPoll(interaction);
-} finally {
-processingInteractions.delete(interaction.id);
-}
-return;
-}
 if (interaction.isButton() && interaction.customId === "vote") {
-if (processingInteractions.has(interaction.id)) return;
-processingInteractions.add(interaction.id);
-try {
 await openVote(interaction);
-} finally {
-processingInteractions.delete(interaction.id);
-}
 return;
 }
 if (interaction.isButton() && interaction.customId === "confirm-vote") {
-if (processingInteractions.has(interaction.id)) return;
-processingInteractions.add(interaction.id);
-try {
 await confirmVote(interaction);
-} finally {
-processingInteractions.delete(interaction.id);
-}
 return;
 }
 if (interaction.isStringSelectMenu() && interaction.customId.startsWith("choice:")) {
-if (processingInteractions.has(interaction.id)) return;
-processingInteractions.add(interaction.id);
-try {
 await handleChoice(interaction);
-} finally {
-processingInteractions.delete(interaction.id);
-}
 return;
 }
 } catch (error) {
@@ -1191,39 +1045,10 @@ flags: MessageFlags.Ephemeral,
 */
 http
 .createServer((req, res) => {
-console.log(`Health check ping received (${req.method} ${req.url})`);
 res.writeHead(200, { "Content-Type": "text/plain" });
 res.end("MayorBot is running.");
 })
 .listen(PORT, () => console.log(`Web server listening on ${PORT}`));
-/*
-* KEEP-ALIVE
-*
-* Render's free Web Services spin down after ~15 minutes with no
-* incoming HTTP request to the service's public URL. Discord's
-* gateway connection (how this bot gets votes) doesn't count as HTTP
-* traffic to Render, so a poll can be sitting there getting clicks
-* while the process itself quietly goes to sleep and stops
-* responding to any of them — no crash, no error, nothing to log.
-*
-* This is a best-effort fallback: it only works if this process is
-* still awake to run it. A free external uptime monitor (UptimeRobot,
-* cron-job.org, etc.) pinging the same URL is more reliable, since it
-* keeps working even if this self-ping is what's asleep.
-*/
-const SELF_PING_URL = process.env.RENDER_EXTERNAL_URL;
-if (SELF_PING_URL) {
-setInterval(() => {
-fetch(SELF_PING_URL).catch((error) =>
-console.error("Self-ping failed:", error.message)
-);
-}, 10 * 60 * 1000); // well under the 15-minute sleep window
-console.log(`Self-ping keep-alive enabled for ${SELF_PING_URL}`);
-} else {
-console.log(
-"RENDER_EXTERNAL_URL not set — self-ping keep-alive is disabled. Set up an external uptime monitor to prevent the service from sleeping."
-);
-}
 /*
 * LOGIN
 */
