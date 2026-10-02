@@ -368,41 +368,36 @@ background: "#111111",
 // always renders tiny — a 2-wide grid means each panel gets a much
 // bigger share of that same fixed display width.
 async function buildCombinedResultImage() {
-const counts = getCounts();
-const leaders = getCharacterLeaders(counts);
-poll.characterLeaders = leaders;
-const panels = [];
-for (let i = 0; i < 5; i++) {
-panels.push(await buildCharacterResultImage(i, counts, leaders));
-}
-const panelHeight = BADGE_HEIGHT + PHOTO_HEIGHT + SYMBOL_BAR_HEIGHT;
-const COLUMNS = 2;
-const rowCount = Math.ceil(panels.length / COLUMNS);
-const canvasWidth = PHOTO_WIDTH * COLUMNS;
-const composites = panels.map((buffer, index) => {
-const row = Math.floor(index / COLUMNS);
-const col = index % COLUMNS;
-const panelsInThisRow = Math.min(COLUMNS, panels.length - row * COLUMNS);
-// Centers a final row that doesn't fully fill the grid (e.g. 5
-// panels = 2 full rows + 1 centered panel on its own row).
-const rowOffset = (canvasWidth - PHOTO_WIDTH * panelsInThisRow) / 2;
-return {
-input: buffer,
-left: Math.round(rowOffset + col * PHOTO_WIDTH),
-top: row * panelHeight,
-};
-});
-return await sharp({
-create: {
-width: canvasWidth,
-height: panelHeight * rowCount,
-channels: 3,
-background: "#111111",
-},
-})
-.composite(composites)
-.jpeg({ quality: 90 })
-.toBuffer();
+  const counts = getCounts();
+  const leaders = getCharacterLeaders(counts);
+  poll.characterLeaders = leaders;
+
+  const panels = [];
+  for (let i = 0; i < 5; i++) {
+    panels.push(await buildCharacterResultImage(i, counts, leaders));
+  }
+
+  const panelHeight = BADGE_HEIGHT + PHOTO_HEIGHT + SYMBOL_BAR_HEIGHT;
+
+  // One single row: every panel is the same size, placed edge to edge,
+  // so nothing is cropped or resized.
+  const composites = panels.map((buffer, index) => ({
+    input: buffer,
+    left: index * PHOTO_WIDTH,
+    top: 0,
+  }));
+
+  return await sharp({
+    create: {
+      width: PHOTO_WIDTH * panels.length,
+      height: panelHeight,
+      channels: 3,
+      background: "#111111",
+    },
+  })
+    .composite(composites)
+    .jpeg({ quality: 90 })
+    .toBuffer();
 }
 /*
 * PERSISTENCE
